@@ -154,7 +154,58 @@ export function dedupeQuestionsForPractice(questions) {
   });
 }
 
-function getDuplicateQuestionKey(question) {
+export function calculateBankProgress({ bank, questions = [], progressRows = [] }) {
+  const bankId = bank?.id || "";
+  const bankQuestions = questions.filter((question) => question.bankId === bankId);
+  const groups = groupQuestionsByDuplicateKey(bankQuestions);
+  const progressByQuestionId = new Map(progressRows
+    .filter((row) => row.bankId === bankId)
+    .map((row) => [row.questionId, row]));
+  let done = 0;
+  let correct = 0;
+  let wrong = 0;
+
+  groups.forEach((group) => {
+    const rows = group
+      .map((question) => progressByQuestionId.get(question.id))
+      .filter(Boolean);
+    if (!rows.length) return;
+    const answeredRows = rows.filter((row) => row.answered);
+    if (answeredRows.length) {
+      done += 1;
+      const latest = answeredRows.sort(compareProgressLatestFirst)[0];
+      if (latest.correct) correct += 1;
+    }
+    if (rows.some((row) => row.wrongCount > 0)) wrong += 1;
+  });
+
+  const total = groups.length || bank?.questionCount || bank?.total || 0;
+  return {
+    done,
+    correct,
+    wrong,
+    total,
+    rate: total ? Math.min(100, Math.round((done / total) * 100)) : 0,
+  };
+}
+
+function groupQuestionsByDuplicateKey(questions) {
+  const groups = new Map();
+  questions.forEach((question) => {
+    const key = getDuplicateQuestionKey(question) || question.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(question);
+  });
+  return [...groups.values()];
+}
+
+function compareProgressLatestFirst(a, b) {
+  const aTime = Date.parse(a.lastAnsweredAt || a.updatedAt || a.cloudUpdatedAt || "") || 0;
+  const bTime = Date.parse(b.lastAnsweredAt || b.updatedAt || b.cloudUpdatedAt || "") || 0;
+  return bTime - aTime;
+}
+
+export function getDuplicateQuestionKey(question) {
   if (!question?.id || !question?.bankId) return "";
   if (question.cloudQuestionId) return `${question.bankId}::cloud::${question.cloudQuestionId}`;
   const contentKey = [

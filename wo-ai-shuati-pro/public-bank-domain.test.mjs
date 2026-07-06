@@ -5,6 +5,7 @@ import {
   areLocalQuestionsSameAsCloud,
   buildReviewExport,
   buildReviewGroups,
+  calculateBankProgress,
   dedupeQuestionsForPractice,
   buildSavedBankRelation,
   getPublishBlocker,
@@ -372,4 +373,62 @@ test("practice question dedupe removes repeated local question records", () => {
   }]);
 
   assert.deepEqual(questions.map((question) => question.id), ["q_1", "q_3"]);
+});
+
+test("bank progress counts duplicated local question records once", () => {
+  const progress = calculateBankProgress({
+    bank: {
+      id: "bank_1",
+      questionCount: 2,
+    },
+    questions: [{
+      id: "q_1",
+      bankId: "bank_1",
+      order: 1,
+      stem: "同题",
+      answer: "A",
+    }, {
+      id: "q_2",
+      bankId: "bank_1",
+      order: 1,
+      stem: "同题",
+      answer: "A",
+    }, {
+      id: "q_3",
+      bankId: "bank_1",
+      order: 2,
+      stem: "另一题",
+      answer: "B",
+    }],
+    progressRows: [{
+      questionId: "q_1",
+      bankId: "bank_1",
+      answered: true,
+      correct: false,
+      wrongCount: 2,
+      lastAnsweredAt: "2026-07-01T00:00:00.000Z",
+    }, {
+      questionId: "q_2",
+      bankId: "bank_1",
+      answered: true,
+      correct: true,
+      wrongCount: 0,
+      lastAnsweredAt: "2026-07-02T00:00:00.000Z",
+    }, {
+      questionId: "q_3",
+      bankId: "bank_1",
+      answered: true,
+      correct: true,
+      wrongCount: 0,
+      lastAnsweredAt: "2026-07-03T00:00:00.000Z",
+    }],
+  });
+
+  assert.deepEqual(progress, {
+    done: 2,
+    correct: 2,
+    wrong: 1,
+    total: 2,
+    rate: 100,
+  });
 });

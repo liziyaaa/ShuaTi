@@ -3,6 +3,7 @@ import {
   areLocalQuestionsSameAsCloud,
   buildReviewExport,
   buildReviewGroups,
+  calculateBankProgress,
   dedupeQuestionsForPractice,
   findSavedPublicBank,
   getPublishBlocker,
@@ -33,6 +34,7 @@ const THEMES = new Set(["default", "tokyonight", "high-contrast", "topaz", "nord
 const state = {
   view: "banks",
   banks: [],
+  allQuestions: [],
   allProgress: [],
   examSessions: [],
   currentBankId: localStorage.getItem(CURRENT_BANK_KEY) || "",
@@ -2846,6 +2848,7 @@ function columnIndex(ref) {
 
 async function refreshBanks() {
   state.banks = (await getAll(STORE_BANKS)).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+  state.allQuestions = await getAll(STORE_QUESTIONS);
   state.allProgress = await getAll(STORE_PROGRESS);
 }
 
@@ -3037,16 +3040,11 @@ function getProgress(questionId) {
 
 function getBankProgress(bankId) {
   const bank = state.banks.find((item) => item.id === bankId);
-  const rows = state.allProgress.filter((item) => item.bankId === bankId);
-  const done = rows.filter((item) => item.answered).length;
-  const correct = rows.filter((item) => item.correct).length;
-  const wrong = rows.filter((item) => item.wrongCount > 0).length;
-  return {
-    done,
-    correct,
-    wrong,
-    rate: bank?.questionCount ? Math.round((done / bank.questionCount) * 100) : 0,
-  };
+  return calculateBankProgress({
+    bank,
+    questions: state.allQuestions,
+    progressRows: state.allProgress,
+  });
 }
 
 function getCurrentSummary() {
