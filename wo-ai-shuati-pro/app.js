@@ -1,5 +1,9 @@
 import { cloud, CLOUD_API_VERSION } from "./cloud.js";
 import {
+  areLocalQuestionsSameAsCloud,
+  buildReviewExport,
+  buildReviewGroups,
+  dedupeQuestionsForPractice,
   findSavedPublicBank,
   getPublishBlocker,
   isProfileComplete,
@@ -7,6 +11,7 @@ import {
   mapCloudProgressToLocal,
   mapPublicBankToLocal,
   mergeProgressRows,
+  planDuplicateQuestionRepair,
 } from "./public-bank-domain.js";
 
 const DB_NAME = "wo-ai-shuati-pro-db";
@@ -63,6 +68,9 @@ const state = {
   selectedBankIds: new Set(),
   selectedPublicBankIds: new Set(),
   questionPickerOpen: false,
+  reviewGroups: [],
+  reviewLoading: false,
+  reviewLoaded: false,
   appVersion: {
     current: localStorage.getItem(APP_VERSION_KEY) || "",
     latest: "",
@@ -136,6 +144,9 @@ function bindGlobalEvents() {
       state.view = button.dataset.view;
       if (state.view === "practice" && state.currentBankId && state.questions.length === 0) {
         await loadCurrentBank();
+      }
+      if (state.view === "wrong") {
+        await loadReviewGroups();
       }
       render();
     });
@@ -264,16 +275,30 @@ async function handleViewClick(event) {
     await addToWrongBook(target.dataset.questionId);
   }
   if (action === "practice-wrong") {
-    state.view = "practice";
+    if (id) await selectBank(id, "practice");
+    else state.view = "practice";
     state.practiceMode = "wrong";
     state.questionPickerOpen = false;
     startPractice();
+  }
+  if (action === "practice-favorite") {
+    if (id) await selectBank(id, "practice");
+    else state.view = "practice";
+    state.practiceMode = "favorite";
+    state.questionPickerOpen = false;
+    startPractice();
+  }
+  if (action === "export-review-bank") {
+    exportReviewBank(id);
   }
   if (action === "master-question") {
     await markMastered(target.dataset.questionId);
   }
   if (action === "export-backup") {
     await exportBackup();
+  }
+  if (action === "repair-legacy-duplicates") {
+    await repairLegacyDuplicateQuestions();
   }
   if (action === "clear-all") {
     await clearAllData();
@@ -1160,39 +1185,66 @@ function renderExamQuestionStatus(result) {
 }
 
 function renderWrong() {
-  const bank = getCurrentBank();
-  if (!bank) {
-    view.innerHTML = renderEmpty("还没有选择题库", "请先选择一个题库。");
-    return;
+  if (!state.reviewLoading && !state.reviewLoaded) {
+    loadReviewGroups().then(() => {
+      if (state.view === "wrong") renderWrong();
+    });
   }
-  const wrongQuestions = state.questions.filter((question) => getProgress(question.id).wrongCount > 0);
+  const totalWrong = state.reviewGroups.reduce((sum, group) => sum + group.wrongQuestions.length, 0);
+  const totalFavorite = state.reviewGroups.reduce((sum, group) => sum + group.favoriteQuestions.length, 0);
   view.innerHTML = `
     <section class="panel">
-      <h2>错题本</h2>
-      <p class="subtle">${escapeHtml(getBankTitle(bank))} · ${wrongQuestions.length} 道错题</p>
-      <div class="actions">
-        <button class="button" type="button" data-action="practice-wrong">重练错题</button>
+      <h2>错题与收藏</h2>
+      <p class="subtle">按题库整理练习过的错题和收藏题，可单独重练或导出。</p>
+      <div class="metric-row">
+        <div class="metric compact-metric"><strong>${totalWrong}</strong><span>错题</span></div>
+        <div class="metric compact-metric"><strong>${totalFavorite}</strong><span>收藏</span></div>
+        <div class="metric compact-metric"><strong>${state.reviewGroups.length}</strong><span>题库</span></div>
       </div>
     </section>
-    <section class="question-list">
-      ${wrongQuestions.length ? wrongQuestions.map(renderWrongItem).join("") : renderEmpty("暂时没有错题", "答错的题会自动出现在这里。")}
+    <section class="bank-list">
+      ${state.reviewLoading ? renderEmpty("正在整理", "正在读取本地题库记录。") : ""}
+      ${!state.reviewLoading && state.reviewGroups.length ? state.reviewGroups.map(renderReviewGroup).join("") : ""}
+      ${!state.reviewLoading && !state.reviewGroups.length ? renderEmpty("暂无错题和收藏", "答错或收藏过的题会按题库出现在这里。") : ""}
     </section>
   `;
 }
 
-function renderWrongItem(question) {
-  const progress = getProgress(question.id);
+function renderReviewGroup(group) {
+  const wrongCount = group.wrongQuestions.length;
+  const favoriteCount = group.favoriteQuestions.length;
   return `
-    <article class="list-item">
+    <article class="panel review-bank-card">
+      <div class="bank-head">
+        <div>
+          <h3>${escapeHtml(getBankTitle(group.bank))}</h3>
+          <p class="subtle">${wrongCount} 道错题 · ${favoriteCount} 道收藏题</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="button" type="button" data-action="practice-wrong" data-id="${escapeAttr(group.bank.id)}" ${wrongCount ? "" : "disabled"}>重练错题</button>
+        <button class="ghost-button" type="button" data-action="practice-favorite" data-id="${escapeAttr(group.bank.id)}" ${favoriteCount ? "" : "disabled"}>练习收藏</button>
+        <button class="ghost-button" type="button" data-action="export-review-bank" data-id="${escapeAttr(group.bank.id)}">导出</button>
+      </div>
+      ${wrongCount ? `<div class="review-section"><div class="section-label">错题</div>${group.wrongQuestions.map((item) => renderReviewItem(item, "wrong")).join("")}</div>` : ""}
+      ${favoriteCount ? `<div class="review-section"><div class="section-label">收藏</div>${group.favoriteQuestions.map((item) => renderReviewItem(item, "favorite")).join("")}</div>` : ""}
+    </article>
+  `;
+}
+
+function renderReviewItem(item, kind) {
+  const { question, progress } = item;
+  const label = kind === "wrong" ? `错 ${progress.wrongCount} 次` : "已收藏";
+  const pillClass = kind === "wrong" ? "warn" : "good";
+  return `
+    <article class="list-item compact-review-item">
       <div class="chip-row">
         <span class="type-pill">${typeLabel(question.type)}</span>
-        <span class="type-pill warn">错 ${progress.wrongCount} 次</span>
+        <span class="type-pill ${pillClass}">${escapeHtml(label)}</span>
       </div>
       <p>${escapeHtml(question.stem)}</p>
       <p class="subtle">正确答案：${escapeHtml(getAnswerDisplay(question))}</p>
-      <div class="actions">
-        <button class="ghost-button" type="button" data-action="master-question" data-question-id="${question.id}">标记掌握</button>
-      </div>
+      ${kind === "wrong" ? `<div class="actions"><button class="ghost-button" type="button" data-action="master-question" data-question-id="${question.id}">标记掌握</button></div>` : ""}
     </article>
   `;
 }
@@ -1305,6 +1357,7 @@ function renderSettingsContent(bank = getCurrentBank(), summary = bank ? getCurr
       ${renderCloudSyncPanel(bank, summary)}
       <div class="grid">
         <button class="button" type="button" data-action="export-backup">导出全部备份</button>
+        <button class="ghost-button" type="button" data-action="repair-legacy-duplicates">修复 2026.07.06.1 之前重复题</button>
         <div class="field">
           <label for="restoreFile">导入备份 JSON</label>
           <input id="restoreFile" type="file" accept=".json,application/json" />
@@ -1568,7 +1621,7 @@ async function usePublicBank(bankId) {
     await refreshBanks();
     resetPracticeQueue();
     state.selectedPublicBankIds.delete(bankId);
-    showToast(`已保存 ${saved.questionCount} 道题，可在题库页开始练习`);
+    showToast(saved.updated ? `题库已更新为最新版本，共 ${saved.questionCount} 道题` : `已保存 ${saved.questionCount} 道题，可在题库页开始练习`);
     render();
   } catch (error) {
     console.error(error);
@@ -1581,7 +1634,27 @@ async function savePublicBankToLocal(bankId) {
   if (!payload) throw new Error("找不到公开题库");
   const existing = findSavedPublicBank(state.banks, payload.bank.id);
   if (existing) {
-    return { skipped: true, localBankId: existing.id, questionCount: existing.questionCount || existing.total || 0 };
+    const existingQuestions = await getByIndex(STORE_QUESTIONS, "bankId", existing.id);
+    if (areLocalQuestionsSameAsCloud(existingQuestions, payload.questions || [])) {
+      return { skipped: true, localBankId: existing.id, questionCount: existing.questionCount || existing.total || 0 };
+    }
+    const now = new Date().toISOString();
+    const existingQuestionIds = new Map(existingQuestions.map((question) => [question.cloudQuestionId, question.id]));
+    const { localBank, localQuestions } = mapPublicBankToLocal({
+      payload,
+      localBankId: existing.id,
+      now,
+      createQuestionId: (cloudQuestion) => existingQuestionIds.get(cloudQuestion.id) || createId("q"),
+      buildBankName,
+      countQuestionTypes,
+    });
+    await replaceBankWithQuestions({
+      ...localBank,
+      tags: [...new Set([...(localBank.tags || []), ...(existing.tags || [])].map(cleanText).filter(Boolean))],
+      createdAt: existing.createdAt || localBank.createdAt,
+      lastStudiedAt: existing.lastStudiedAt || "",
+    }, localQuestions);
+    return { skipped: false, updated: true, localBankId: existing.id, questionCount: localQuestions.length };
   }
   const localBankId = createId("bank");
   const now = new Date().toISOString();
@@ -1609,11 +1682,13 @@ async function saveSelectedPublicBanks() {
   try {
     showToast(`正在添加 ${ids.length} 个公开题库...`);
     let savedCount = 0;
+    let updatedCount = 0;
     let skippedCount = 0;
     let lastLocalBankId = "";
     for (const id of ids) {
       const result = await savePublicBankToLocal(id);
       if (result.skipped) skippedCount += 1;
+      else if (result.updated) updatedCount += 1;
       else savedCount += 1;
       lastLocalBankId = result.localBankId || lastLocalBankId;
     }
@@ -1623,7 +1698,7 @@ async function saveSelectedPublicBanks() {
     if (lastLocalBankId) setCurrentBank(lastLocalBankId, true);
     resetPracticeQueue();
     render();
-    showToast(`批量添加完成：新增 ${savedCount} 个，已存在 ${skippedCount} 个`);
+    showToast(`批量添加完成：新增 ${savedCount} 个，更新 ${updatedCount} 个，已存在 ${skippedCount} 个`);
   } catch (error) {
     console.error(error);
     showToast(`批量添加失败：${error.message || error}`);
@@ -1848,7 +1923,7 @@ function resumePractice() {
   state.practiceMode = session.mode;
   state.sessionMode = normalizeSessionMode(session.sessionMode);
   state.answerFeedbackMode = normalizeAnswerFeedbackMode(session.answerFeedbackMode || state.answerFeedbackMode);
-  state.queue = session.queueIds.map((id) => byId.get(id)).filter(Boolean);
+  state.queue = dedupeQuestionsForPractice(session.queueIds.map((id) => byId.get(id)).filter(Boolean));
   state.queueIndex = Math.min(session.queueIndex, Math.max(state.queue.length - 1, 0));
   state.selected = new Set(session.selected || []);
   state.submitted = Boolean(session.submitted);
@@ -1863,7 +1938,7 @@ function resumePractice() {
 }
 
 function buildQueue(mode) {
-  let items = [...state.questions].sort((a, b) => a.order - b.order);
+  let items = dedupeQuestionsForPractice([...state.questions]).sort((a, b) => a.order - b.order);
   if (mode === "wrong") items = items.filter((question) => getProgress(question.id).wrongCount > 0);
   if (mode === "favorite") items = items.filter((question) => getProgress(question.id).favorite);
   if (mode === "unanswered") items = items.filter((question) => !getProgress(question.id).answered);
@@ -2021,7 +2096,10 @@ function getValidPracticeSession() {
   const session = readPracticeSession();
   if (!session || session.bankId !== state.currentBankId || !Array.isArray(session.queueIds)) return null;
   const knownIds = new Set(state.questions.map((question) => question.id));
-  const queueIds = session.queueIds.filter((id) => knownIds.has(id));
+  const byId = new Map(state.questions.map((question) => [question.id, question]));
+  const queueIds = dedupeQuestionsForPractice(session.queueIds.map((id) => byId.get(id)).filter(Boolean))
+    .map((question) => question.id)
+    .filter((id) => knownIds.has(id));
   if (!queueIds.length) return null;
   return {
     ...session,
@@ -2289,10 +2367,21 @@ async function addToWrongBook(questionId) {
 }
 
 async function markMastered(questionId) {
-  const current = getProgress(questionId);
-  const next = { ...current, wrongCount: 0, mastered: true };
-  state.progress.set(questionId, next);
+  const current = await getProgressRecord(questionId);
+  const question = state.questions.find((item) => item.id === questionId)
+    || state.reviewGroups.flatMap((group) => [...group.wrongQuestions, ...group.favoriteQuestions]).find((item) => item.question.id === questionId)?.question;
+  const next = {
+    ...current,
+    id: questionId,
+    questionId,
+    bankId: current.bankId || question?.bankId || state.currentBankId,
+    wrongCount: 0,
+    mastered: true,
+  };
+  if (next.bankId === state.currentBankId) state.progress.set(questionId, next);
   await putRecord(STORE_PROGRESS, next);
+  await refreshBanks();
+  if (state.view === "wrong") await loadReviewGroups();
   showToast("已移出错题本");
   render();
 }
@@ -2491,6 +2580,64 @@ async function exportBackup() {
   };
   downloadBlob(`我爱刷题备份-${dateStamp()}.json`, new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }));
   showToast("备份已导出");
+}
+
+function exportReviewBank(bankId) {
+  const group = state.reviewGroups.find((item) => item.bank.id === bankId);
+  if (!group) {
+    showToast("没有可导出的错题或收藏");
+    return;
+  }
+  const payload = buildReviewExport({
+    bank: group.bank,
+    wrongQuestions: group.wrongQuestions,
+    favoriteQuestions: group.favoriteQuestions,
+    exportedAt: new Date().toISOString(),
+  });
+  const filename = `${getBankTitle(group.bank)}-错题收藏-${dateStamp()}.json`;
+  downloadBlob(filename, new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }));
+  showToast("错题与收藏已导出");
+}
+
+async function repairLegacyDuplicateQuestions() {
+  if (!confirm("将修复 2026.07.06.1 之前导入/保存产生的同题库重复题。建议先导出全部备份。确定继续吗？")) return;
+  const [questions, progressRows] = await Promise.all([
+    getAll(STORE_QUESTIONS),
+    getAll(STORE_PROGRESS),
+  ]);
+  const plan = planDuplicateQuestionRepair({ questions, progressRows });
+  if (!plan.duplicateQuestionIds.length) {
+    showToast("未发现需要修复的重复题");
+    return;
+  }
+
+  const db = await openDB();
+  await txDone(db, [STORE_QUESTIONS, STORE_PROGRESS], "readwrite", (tx) => {
+    const questionStore = tx.objectStore(STORE_QUESTIONS);
+    const progressStore = tx.objectStore(STORE_PROGRESS);
+    plan.duplicateQuestionIds.forEach((id) => questionStore.delete(id));
+    plan.progressIdsToDelete.forEach((id) => progressStore.delete(id));
+    plan.progressToPut.forEach((row) => progressStore.put(row));
+  });
+
+  for (const bankId of plan.affectedBankIds) {
+    const bank = state.banks.find((item) => item.id === bankId) || await getRecord(STORE_BANKS, bankId);
+    if (!bank) continue;
+    const bankQuestions = await getByIndex(STORE_QUESTIONS, "bankId", bankId);
+    await putRecord(STORE_BANKS, {
+      ...bank,
+      questionCount: bankQuestions.length,
+      counts: countQuestionTypes(bankQuestions),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  await refreshBanks();
+  if (state.currentBankId) await loadCurrentBank();
+  if (state.view === "wrong") await loadReviewGroups();
+  resetPracticeQueue();
+  showToast(`已修复 ${plan.duplicateQuestionIds.length} 道重复题`);
+  render();
 }
 
 async function importBackup(file) {
@@ -2739,6 +2886,18 @@ async function refreshExamSessions() {
   state.examSessions = (await getAll(STORE_EXAM_SESSIONS)).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 }
 
+async function loadReviewGroups() {
+  state.reviewLoading = true;
+  const [banks, questions, progressRows] = await Promise.all([
+    getAll(STORE_BANKS),
+    getAll(STORE_QUESTIONS),
+    getAll(STORE_PROGRESS),
+  ]);
+  state.reviewGroups = buildReviewGroups({ banks, questions, progressRows });
+  state.reviewLoading = false;
+  state.reviewLoaded = true;
+}
+
 async function loadCurrentBank() {
   if (!state.currentBankId) return;
   state.questions = (await getByIndex(STORE_QUESTIONS, "bankId", state.currentBankId)).sort((a, b) => a.order - b.order);
@@ -2752,6 +2911,24 @@ async function saveBankWithQuestions(bank, questions) {
     tx.objectStore(STORE_BANKS).put(bank);
     const questionStore = tx.objectStore(STORE_QUESTIONS);
     questions.forEach((question) => questionStore.put(question));
+  });
+}
+
+async function replaceBankWithQuestions(bank, questions) {
+  const db = await openDB();
+  await txDone(db, [STORE_BANKS, STORE_QUESTIONS], "readwrite", (tx) => {
+    tx.objectStore(STORE_BANKS).put(bank);
+    const questionStore = tx.objectStore(STORE_QUESTIONS);
+    const oldRequest = questionStore.index("bankId").openCursor(IDBKeyRange.only(bank.id));
+    oldRequest.onsuccess = () => {
+      const cursor = oldRequest.result;
+      if (!cursor) {
+        questions.forEach((question) => questionStore.put(question));
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
   });
 }
 
@@ -2808,6 +2985,27 @@ async function getAll(storeName) {
 async function getByIndex(storeName, indexName, value) {
   const db = await openDB();
   return requestPromise(db.transaction(storeName, "readonly").objectStore(storeName).index(indexName).getAll(value));
+}
+
+async function getRecord(storeName, key) {
+  const db = await openDB();
+  return requestPromise(db.transaction(storeName, "readonly").objectStore(storeName).get(key));
+}
+
+async function getProgressRecord(questionId) {
+  return await getRecord(STORE_PROGRESS, questionId) || {
+    id: questionId,
+    questionId,
+    bankId: "",
+    selectedAnswer: "",
+    answered: false,
+    correct: false,
+    attempts: 0,
+    wrongCount: 0,
+    favorite: false,
+    mastered: false,
+    lastAnsweredAt: "",
+  };
 }
 
 async function putRecord(storeName, record) {

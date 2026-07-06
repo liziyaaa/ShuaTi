@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  areLocalQuestionsSameAsCloud,
+  buildReviewExport,
+  buildReviewGroups,
+  dedupeQuestionsForPractice,
   buildSavedBankRelation,
   getPublishBlocker,
   mapPublicBankToLocal,
   mapCloudProgressToLocal,
   mergeProgressRows,
+  planDuplicateQuestionRepair,
 } from "./public-bank-domain.js";
 
 test("publish blocker asks for a generic login before provider-specific profile setup", () => {
@@ -217,4 +222,237 @@ test("progress merge keeps newer answer state while preserving larger counters",
   assert.equal(merged[0].attempts, 4);
   assert.equal(merged[0].wrongCount, 3);
   assert.equal(merged[0].favorite, true);
+});
+
+test("review groups include wrong and favorite questions per existing bank", () => {
+  const groups = buildReviewGroups({
+    banks: [{
+      id: "bank_1",
+      name: "题库一",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    }, {
+      id: "bank_2",
+      name: "题库二",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+    }],
+    questions: [{
+      id: "q_1",
+      bankId: "bank_1",
+      stem: "错题",
+    }, {
+      id: "q_2",
+      bankId: "bank_1",
+      stem: "收藏",
+    }, {
+      id: "q_3",
+      bankId: "bank_2",
+      stem: "错题且收藏",
+    }],
+    progressRows: [{
+      questionId: "q_1",
+      bankId: "bank_1",
+      wrongCount: 2,
+      favorite: false,
+    }, {
+      questionId: "q_2",
+      bankId: "bank_1",
+      wrongCount: 0,
+      favorite: true,
+    }, {
+      questionId: "q_3",
+      bankId: "bank_2",
+      wrongCount: 1,
+      favorite: true,
+    }, {
+      questionId: "orphan_q",
+      bankId: "bank_1",
+      wrongCount: 9,
+      favorite: true,
+    }],
+  });
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].bank.id, "bank_2");
+  assert.deepEqual(groups[0].wrongQuestions.map((item) => item.question.id), ["q_3"]);
+  assert.deepEqual(groups[0].favoriteQuestions.map((item) => item.question.id), ["q_3"]);
+  assert.equal(groups[1].bank.id, "bank_1");
+  assert.deepEqual(groups[1].wrongQuestions.map((item) => item.question.id), ["q_1"]);
+  assert.deepEqual(groups[1].favoriteQuestions.map((item) => item.question.id), ["q_2"]);
+});
+
+test("review export keeps bank metadata with wrong and favorite sections", () => {
+  const payload = buildReviewExport({
+    exportedAt: "2026-07-06T00:00:00.000Z",
+    bank: {
+      id: "bank_1",
+      cloudId: "cloud_1",
+      name: "题库一",
+      course: "课程",
+      chapter: "章节",
+      tags: ["期末"],
+    },
+    wrongQuestions: [{
+      question: { id: "q_1", stem: "错题" },
+      progress: { questionId: "q_1", wrongCount: 1 },
+    }],
+    favoriteQuestions: [{
+      question: { id: "q_2", stem: "收藏" },
+      progress: { questionId: "q_2", favorite: true },
+    }],
+  });
+
+  assert.equal(payload.version, 1);
+  assert.equal(payload.bank.cloudId, "cloud_1");
+  assert.equal(payload.wrongQuestions[0].question.stem, "错题");
+  assert.equal(payload.favoriteQuestions[0].question.stem, "收藏");
+});
+
+test("local public bank questions compare equal to unchanged cloud questions", () => {
+  assert.equal(areLocalQuestionsSameAsCloud([{
+    id: "local_q_1",
+    bankId: "local_bank",
+    cloudQuestionId: "cloud_q_1",
+    order: 1,
+    stem: "题干",
+    answer: "A",
+    analysis: "",
+    type: "single",
+    options: [{ label: "A", text: "选项", value: "A" }],
+  }], [{
+    id: "cloud_q_1",
+    order_no: 1,
+    stem: "题干",
+    answer: "A",
+    analysis: "",
+    type: "single",
+    options: [{ label: "A", text: "选项", value: "A" }],
+  }]), true);
+});
+
+test("local public bank questions detect changed cloud content", () => {
+  assert.equal(areLocalQuestionsSameAsCloud([{
+    id: "local_q_1",
+    bankId: "local_bank",
+    cloudQuestionId: "cloud_q_1",
+    order: 1,
+    stem: "旧题干",
+    answer: "A",
+    analysis: "",
+    type: "single",
+    options: [{ label: "A", text: "选项", value: "A" }],
+  }], [{
+    id: "cloud_q_1",
+    order_no: 1,
+    stem: "新题干",
+    answer: "A",
+    analysis: "",
+    type: "single",
+    options: [{ label: "A", text: "选项", value: "A" }],
+  }]), false);
+});
+
+test("duplicate question repair keeps one question and merges progress", () => {
+  const plan = planDuplicateQuestionRepair({
+    questions: [{
+      id: "q_keep",
+      bankId: "bank_1",
+      cloudQuestionId: "cloud_q_1",
+      order: 1,
+      stem: "题干",
+      answer: "A",
+      createdAt: "2026-07-01T00:00:00.000Z",
+    }, {
+      id: "q_drop",
+      bankId: "bank_1",
+      cloudQuestionId: "cloud_q_1",
+      order: 1,
+      stem: "题干",
+      answer: "A",
+      createdAt: "2026-07-02T00:00:00.000Z",
+    }],
+    progressRows: [{
+      id: "q_keep",
+      questionId: "q_keep",
+      bankId: "bank_1",
+      answered: true,
+      correct: true,
+      attempts: 1,
+      wrongCount: 0,
+      favorite: false,
+      mastered: false,
+      lastAnsweredAt: "2026-07-01T01:00:00.000Z",
+    }, {
+      id: "q_drop",
+      questionId: "q_drop",
+      bankId: "bank_1",
+      answered: true,
+      correct: false,
+      attempts: 3,
+      wrongCount: 2,
+      favorite: true,
+      mastered: false,
+      lastAnsweredAt: "2026-07-02T01:00:00.000Z",
+    }],
+  });
+
+  assert.deepEqual(plan.duplicateQuestionIds, ["q_drop"]);
+  assert.deepEqual(plan.progressIdsToDelete, ["q_drop"]);
+  assert.deepEqual(plan.affectedBankIds, ["bank_1"]);
+  assert.equal(plan.progressToPut.length, 1);
+  assert.equal(plan.progressToPut[0].questionId, "q_keep");
+  assert.equal(plan.progressToPut[0].wrongCount, 2);
+  assert.equal(plan.progressToPut[0].favorite, true);
+  assert.equal(plan.progressToPut[0].attempts, 3);
+});
+
+test("duplicate question repair also detects legacy content duplicates without cloud ids", () => {
+  const plan = planDuplicateQuestionRepair({
+    questions: [{
+      id: "q_keep",
+      bankId: "bank_1",
+      order: 1,
+      stem: "同题",
+      answer: "A",
+    }, {
+      id: "q_drop",
+      bankId: "bank_1",
+      order: 1,
+      stem: "同题",
+      answer: "A",
+    }, {
+      id: "q_other",
+      bankId: "bank_1",
+      order: 2,
+      stem: "另一题",
+      answer: "B",
+    }],
+    progressRows: [],
+  });
+
+  assert.deepEqual(plan.duplicateQuestionIds, ["q_drop"]);
+  assert.deepEqual(plan.affectedBankIds, ["bank_1"]);
+});
+
+test("practice question dedupe removes repeated local question records", () => {
+  const questions = dedupeQuestionsForPractice([{
+    id: "q_1",
+    bankId: "bank_1",
+    order: 1,
+    stem: "同题",
+    answer: "A",
+  }, {
+    id: "q_2",
+    bankId: "bank_1",
+    order: 1,
+    stem: "同题",
+    answer: "A",
+  }, {
+    id: "q_3",
+    bankId: "bank_1",
+    order: 2,
+    stem: "另一题",
+    answer: "B",
+  }]);
+
+  assert.deepEqual(questions.map((question) => question.id), ["q_1", "q_3"]);
 });

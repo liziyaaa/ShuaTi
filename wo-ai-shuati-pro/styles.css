@@ -503,6 +503,24 @@ h3 {
   color: var(--muted);
 }
 
+.review-bank-card {
+  display: grid;
+  gap: 12px;
+}
+
+.review-section {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-review-item {
+  padding: 10px;
+}
+
+.compact-review-item p {
+  margin: 6px 0;
+}
+
 .form-grid {
   display: grid;
   gap: 10px;

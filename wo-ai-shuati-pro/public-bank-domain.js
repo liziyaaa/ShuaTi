@@ -76,6 +76,161 @@ export function mergeProgressRows({ localRows, cloudRows }) {
   return [...merged.values()];
 }
 
+export function buildReviewGroups({ banks, questions, progressRows }) {
+  const bankById = new Map(banks.map((bank) => [bank.id, bank]));
+  const progressByQuestionId = new Map(progressRows.map((row) => [row.questionId, row]));
+  const groups = new Map();
+  questions.forEach((question) => {
+    const progress = progressByQuestionId.get(question.id);
+    if (!progress || (!progress.wrongCount && !progress.favorite)) return;
+    const bank = bankById.get(question.bankId);
+    if (!bank) return;
+    if (!groups.has(question.bankId)) {
+      groups.set(question.bankId, {
+        bank,
+        wrongQuestions: [],
+        favoriteQuestions: [],
+      });
+    }
+    const group = groups.get(question.bankId);
+    const item = { question, progress };
+    if (progress.wrongCount > 0) group.wrongQuestions.push(item);
+    if (progress.favorite) group.favoriteQuestions.push(item);
+  });
+  return [...groups.values()].sort((a, b) => {
+    const aTime = a.bank.lastStudiedAt || a.bank.updatedAt || "";
+    const bTime = b.bank.lastStudiedAt || b.bank.updatedAt || "";
+    return bTime.localeCompare(aTime);
+  });
+}
+
+export function buildReviewExport({ bank, wrongQuestions, favoriteQuestions, exportedAt }) {
+  const encodeItems = (items) => items.map(({ question, progress }) => ({
+    question,
+    progress,
+  }));
+  return {
+    version: 1,
+    exportedAt,
+    bank: {
+      id: bank.id,
+      cloudId: bank.cloudId || "",
+      name: bank.name || "",
+      course: bank.course || "",
+      chapter: bank.chapter || "",
+      tags: bank.tags || [],
+    },
+    wrongQuestions: encodeItems(wrongQuestions),
+    favoriteQuestions: encodeItems(favoriteQuestions),
+  };
+}
+
+export function areLocalQuestionsSameAsCloud(localQuestions, cloudQuestions) {
+  if (localQuestions.length !== cloudQuestions.length) return false;
+  const localByCloudId = new Map(localQuestions.map((question) => [question.cloudQuestionId || `${question.bankId}_${question.order}`, question]));
+  return cloudQuestions.every((cloudQuestion, index) => {
+    const localQuestion = localByCloudId.get(cloudQuestion.id) || localQuestions[index];
+    if (!localQuestion) return false;
+    return normalizeComparableQuestion(localQuestion) === normalizeComparableQuestion({
+      cloudQuestionId: cloudQuestion.id,
+      order: cloudQuestion.order_no || index + 1,
+      stem: cloudQuestion.stem,
+      answer: cloudQuestion.answer,
+      analysis: cloudQuestion.analysis || "",
+      type: cloudQuestion.type,
+      options: cloudQuestion.options || [],
+    });
+  });
+}
+
+export function planDuplicateQuestionRepair({ questions, progressRows }) {
+  const groups = new Map();
+  questions.forEach((question) => {
+    const key = getDuplicateQuestionKey(question);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(question);
+  });
+
+  const progressByQuestionId = new Map();
+  progressRows.forEach((row) => {
+    if (!progressByQuestionId.has(row.questionId)) progressByQuestionId.set(row.questionId, []);
+    progressByQuestionId.get(row.questionId).push(row);
+  });
+
+  const duplicateQuestionIds = [];
+  const progressIdsToDelete = [];
+  const progressToPut = [];
+  const affectedBankIds = new Set();
+
+  groups.forEach((items) => {
+    if (items.length < 2) return;
+    const sorted = [...items].sort(compareQuestionsForRepair);
+    const canonical = sorted[0];
+    const duplicates = sorted.slice(1);
+    affectedBankIds.add(canonical.bankId);
+    duplicateQuestionIds.push(...duplicates.map((question) => question.id));
+
+    const rows = sorted.flatMap((question) => progressByQuestionId.get(question.id) || []);
+    if (!rows.length) return;
+    progressIdsToDelete.push(...rows.filter((row) => row.questionId !== canonical.id).map((row) => row.id || row.questionId));
+    const remappedRows = rows.map((row) => ({
+      ...row,
+      id: canonical.id,
+      questionId: canonical.id,
+      bankId: canonical.bankId,
+    }));
+    const [merged] = mergeProgressRows({ localRows: [], cloudRows: remappedRows });
+    if (merged) progressToPut.push(merged);
+  });
+
+  return {
+    duplicateQuestionIds,
+    progressIdsToDelete,
+    progressToPut,
+    affectedBankIds: [...affectedBankIds],
+  };
+}
+
+export function dedupeQuestionsForPractice(questions) {
+  const seen = new Set();
+  return questions.filter((question) => {
+    const key = getDuplicateQuestionKey(question);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getDuplicateQuestionKey(question) {
+  if (!question?.id || !question?.bankId) return "";
+  if (question.cloudQuestionId) return `${question.bankId}::cloud::${question.cloudQuestionId}`;
+  const contentKey = [
+    question.order || "",
+    String(question.stem || "").trim(),
+    String(question.answer || "").trim(),
+  ].join("::");
+  return contentKey.trim() ? `${question.bankId}::content::${contentKey}` : "";
+}
+
+function compareQuestionsForRepair(a, b) {
+  return (Number(a.order || 0) - Number(b.order || 0))
+    || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+}
+
+function normalizeComparableQuestion(question) {
+  return JSON.stringify({
+    cloudQuestionId: question.cloudQuestionId || "",
+    order: Number(question.order || 0),
+    stem: String(question.stem || ""),
+    answer: String(question.answer || ""),
+    analysis: String(question.analysis || ""),
+    type: String(question.type || ""),
+    options: question.options || [],
+  });
+}
+
 export function mapPublicBankToLocal({
   payload,
   localBankId,
@@ -105,7 +260,7 @@ export function mapCloudBankToLocal({
   visibility = payload.bank.visibility || "private",
 }) {
   const localQuestions = payload.questions.map((question, index) => ({
-    id: createQuestionId(),
+    id: createQuestionId(question, index),
     cloudQuestionId: question.id,
     bankId: localBankId,
     order: question.order_no || index + 1,
