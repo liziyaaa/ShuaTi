@@ -143,55 +143,6 @@ export function areLocalQuestionsSameAsCloud(localQuestions, cloudQuestions) {
   });
 }
 
-export function planDuplicateQuestionRepair({ questions, progressRows }) {
-  const groups = new Map();
-  questions.forEach((question) => {
-    const key = getDuplicateQuestionKey(question);
-    if (!key) return;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(question);
-  });
-
-  const progressByQuestionId = new Map();
-  progressRows.forEach((row) => {
-    if (!progressByQuestionId.has(row.questionId)) progressByQuestionId.set(row.questionId, []);
-    progressByQuestionId.get(row.questionId).push(row);
-  });
-
-  const duplicateQuestionIds = [];
-  const progressIdsToDelete = [];
-  const progressToPut = [];
-  const affectedBankIds = new Set();
-
-  groups.forEach((items) => {
-    if (items.length < 2) return;
-    const sorted = [...items].sort(compareQuestionsForRepair);
-    const canonical = sorted[0];
-    const duplicates = sorted.slice(1);
-    affectedBankIds.add(canonical.bankId);
-    duplicateQuestionIds.push(...duplicates.map((question) => question.id));
-
-    const rows = sorted.flatMap((question) => progressByQuestionId.get(question.id) || []);
-    if (!rows.length) return;
-    progressIdsToDelete.push(...rows.filter((row) => row.questionId !== canonical.id).map((row) => row.id || row.questionId));
-    const remappedRows = rows.map((row) => ({
-      ...row,
-      id: canonical.id,
-      questionId: canonical.id,
-      bankId: canonical.bankId,
-    }));
-    const [merged] = mergeProgressRows({ localRows: [], cloudRows: remappedRows });
-    if (merged) progressToPut.push(merged);
-  });
-
-  return {
-    duplicateQuestionIds,
-    progressIdsToDelete,
-    progressToPut,
-    affectedBankIds: [...affectedBankIds],
-  };
-}
-
 export function dedupeQuestionsForPractice(questions) {
   const seen = new Set();
   return questions.filter((question) => {
@@ -212,11 +163,6 @@ function getDuplicateQuestionKey(question) {
     String(question.answer || "").trim(),
   ].join("::");
   return contentKey.trim() ? `${question.bankId}::content::${contentKey}` : "";
-}
-
-function compareQuestionsForRepair(a, b) {
-  return (Number(a.order || 0) - Number(b.order || 0))
-    || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
 }
 
 function normalizeComparableQuestion(question) {

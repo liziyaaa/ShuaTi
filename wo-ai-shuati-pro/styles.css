@@ -508,6 +508,28 @@ h3 {
   gap: 12px;
 }
 
+.review-bank-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-bank-toggle h3 {
+  margin: 0;
+}
+
+.review-bank-toggle .subtle {
+  margin: 4px 0 0;
+}
+
 .review-section {
   display: grid;
   gap: 8px;

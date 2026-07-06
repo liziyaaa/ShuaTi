@@ -11,7 +11,6 @@ import {
   mapCloudProgressToLocal,
   mapPublicBankToLocal,
   mergeProgressRows,
-  planDuplicateQuestionRepair,
 } from "./public-bank-domain.js";
 
 const DB_NAME = "wo-ai-shuati-pro-db";
@@ -71,6 +70,7 @@ const state = {
   reviewGroups: [],
   reviewLoading: false,
   reviewLoaded: false,
+  expandedReviewBankIds: new Set(),
   appVersion: {
     current: localStorage.getItem(APP_VERSION_KEY) || "",
     latest: "",
@@ -291,14 +291,14 @@ async function handleViewClick(event) {
   if (action === "export-review-bank") {
     exportReviewBank(id);
   }
+  if (action === "toggle-review-bank") {
+    toggleReviewBank(id);
+  }
   if (action === "master-question") {
     await markMastered(target.dataset.questionId);
   }
   if (action === "export-backup") {
     await exportBackup();
-  }
-  if (action === "repair-legacy-duplicates") {
-    await repairLegacyDuplicateQuestions();
   }
   if (action === "clear-all") {
     await clearAllData();
@@ -1195,7 +1195,7 @@ function renderWrong() {
   view.innerHTML = `
     <section class="panel">
       <h2>错题与收藏</h2>
-      <p class="subtle">按题库整理练习过的错题和收藏题，可单独重练或导出。</p>
+      <p class="subtle">按题库整理练习过的错题和收藏题，点击题库可展开明细。</p>
       <div class="metric-row">
         <div class="metric compact-metric"><strong>${totalWrong}</strong><span>错题</span></div>
         <div class="metric compact-metric"><strong>${totalFavorite}</strong><span>收藏</span></div>
@@ -1213,21 +1213,23 @@ function renderWrong() {
 function renderReviewGroup(group) {
   const wrongCount = group.wrongQuestions.length;
   const favoriteCount = group.favoriteQuestions.length;
+  const expanded = state.expandedReviewBankIds.has(group.bank.id);
   return `
     <article class="panel review-bank-card">
-      <div class="bank-head">
+      <button class="review-bank-toggle" type="button" data-action="toggle-review-bank" data-id="${escapeAttr(group.bank.id)}" aria-expanded="${expanded ? "true" : "false"}">
         <div>
           <h3>${escapeHtml(getBankTitle(group.bank))}</h3>
           <p class="subtle">${wrongCount} 道错题 · ${favoriteCount} 道收藏题</p>
         </div>
-      </div>
+        <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+      </button>
       <div class="actions">
         <button class="button" type="button" data-action="practice-wrong" data-id="${escapeAttr(group.bank.id)}" ${wrongCount ? "" : "disabled"}>重练错题</button>
         <button class="ghost-button" type="button" data-action="practice-favorite" data-id="${escapeAttr(group.bank.id)}" ${favoriteCount ? "" : "disabled"}>练习收藏</button>
         <button class="ghost-button" type="button" data-action="export-review-bank" data-id="${escapeAttr(group.bank.id)}">导出</button>
       </div>
-      ${wrongCount ? `<div class="review-section"><div class="section-label">错题</div>${group.wrongQuestions.map((item) => renderReviewItem(item, "wrong")).join("")}</div>` : ""}
-      ${favoriteCount ? `<div class="review-section"><div class="section-label">收藏</div>${group.favoriteQuestions.map((item) => renderReviewItem(item, "favorite")).join("")}</div>` : ""}
+      ${expanded && wrongCount ? `<div class="review-section"><div class="section-label">错题</div>${group.wrongQuestions.map((item) => renderReviewItem(item, "wrong")).join("")}</div>` : ""}
+      ${expanded && favoriteCount ? `<div class="review-section"><div class="section-label">收藏</div>${group.favoriteQuestions.map((item) => renderReviewItem(item, "favorite")).join("")}</div>` : ""}
     </article>
   `;
 }
@@ -1357,7 +1359,6 @@ function renderSettingsContent(bank = getCurrentBank(), summary = bank ? getCurr
       ${renderCloudSyncPanel(bank, summary)}
       <div class="grid">
         <button class="button" type="button" data-action="export-backup">导出全部备份</button>
-        <button class="ghost-button" type="button" data-action="repair-legacy-duplicates">修复 2026.07.06.1 之前重复题</button>
         <div class="field">
           <label for="restoreFile">导入备份 JSON</label>
           <input id="restoreFile" type="file" accept=".json,application/json" />
@@ -2599,44 +2600,10 @@ function exportReviewBank(bankId) {
   showToast("错题与收藏已导出");
 }
 
-async function repairLegacyDuplicateQuestions() {
-  if (!confirm("将修复 2026.07.06.1 之前导入/保存产生的同题库重复题。建议先导出全部备份。确定继续吗？")) return;
-  const [questions, progressRows] = await Promise.all([
-    getAll(STORE_QUESTIONS),
-    getAll(STORE_PROGRESS),
-  ]);
-  const plan = planDuplicateQuestionRepair({ questions, progressRows });
-  if (!plan.duplicateQuestionIds.length) {
-    showToast("未发现需要修复的重复题");
-    return;
-  }
-
-  const db = await openDB();
-  await txDone(db, [STORE_QUESTIONS, STORE_PROGRESS], "readwrite", (tx) => {
-    const questionStore = tx.objectStore(STORE_QUESTIONS);
-    const progressStore = tx.objectStore(STORE_PROGRESS);
-    plan.duplicateQuestionIds.forEach((id) => questionStore.delete(id));
-    plan.progressIdsToDelete.forEach((id) => progressStore.delete(id));
-    plan.progressToPut.forEach((row) => progressStore.put(row));
-  });
-
-  for (const bankId of plan.affectedBankIds) {
-    const bank = state.banks.find((item) => item.id === bankId) || await getRecord(STORE_BANKS, bankId);
-    if (!bank) continue;
-    const bankQuestions = await getByIndex(STORE_QUESTIONS, "bankId", bankId);
-    await putRecord(STORE_BANKS, {
-      ...bank,
-      questionCount: bankQuestions.length,
-      counts: countQuestionTypes(bankQuestions),
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
-  await refreshBanks();
-  if (state.currentBankId) await loadCurrentBank();
-  if (state.view === "wrong") await loadReviewGroups();
-  resetPracticeQueue();
-  showToast(`已修复 ${plan.duplicateQuestionIds.length} 道重复题`);
+function toggleReviewBank(bankId) {
+  if (!bankId) return;
+  if (state.expandedReviewBankIds.has(bankId)) state.expandedReviewBankIds.delete(bankId);
+  else state.expandedReviewBankIds.add(bankId);
   render();
 }
 

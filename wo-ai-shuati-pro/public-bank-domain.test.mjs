@@ -11,7 +11,6 @@ import {
   mapPublicBankToLocal,
   mapCloudProgressToLocal,
   mergeProgressRows,
-  planDuplicateQuestionRepair,
 } from "./public-bank-domain.js";
 
 test("publish blocker asks for a generic login before provider-specific profile setup", () => {
@@ -349,88 +348,6 @@ test("local public bank questions detect changed cloud content", () => {
     type: "single",
     options: [{ label: "A", text: "选项", value: "A" }],
   }]), false);
-});
-
-test("duplicate question repair keeps one question and merges progress", () => {
-  const plan = planDuplicateQuestionRepair({
-    questions: [{
-      id: "q_keep",
-      bankId: "bank_1",
-      cloudQuestionId: "cloud_q_1",
-      order: 1,
-      stem: "题干",
-      answer: "A",
-      createdAt: "2026-07-01T00:00:00.000Z",
-    }, {
-      id: "q_drop",
-      bankId: "bank_1",
-      cloudQuestionId: "cloud_q_1",
-      order: 1,
-      stem: "题干",
-      answer: "A",
-      createdAt: "2026-07-02T00:00:00.000Z",
-    }],
-    progressRows: [{
-      id: "q_keep",
-      questionId: "q_keep",
-      bankId: "bank_1",
-      answered: true,
-      correct: true,
-      attempts: 1,
-      wrongCount: 0,
-      favorite: false,
-      mastered: false,
-      lastAnsweredAt: "2026-07-01T01:00:00.000Z",
-    }, {
-      id: "q_drop",
-      questionId: "q_drop",
-      bankId: "bank_1",
-      answered: true,
-      correct: false,
-      attempts: 3,
-      wrongCount: 2,
-      favorite: true,
-      mastered: false,
-      lastAnsweredAt: "2026-07-02T01:00:00.000Z",
-    }],
-  });
-
-  assert.deepEqual(plan.duplicateQuestionIds, ["q_drop"]);
-  assert.deepEqual(plan.progressIdsToDelete, ["q_drop"]);
-  assert.deepEqual(plan.affectedBankIds, ["bank_1"]);
-  assert.equal(plan.progressToPut.length, 1);
-  assert.equal(plan.progressToPut[0].questionId, "q_keep");
-  assert.equal(plan.progressToPut[0].wrongCount, 2);
-  assert.equal(plan.progressToPut[0].favorite, true);
-  assert.equal(plan.progressToPut[0].attempts, 3);
-});
-
-test("duplicate question repair also detects legacy content duplicates without cloud ids", () => {
-  const plan = planDuplicateQuestionRepair({
-    questions: [{
-      id: "q_keep",
-      bankId: "bank_1",
-      order: 1,
-      stem: "同题",
-      answer: "A",
-    }, {
-      id: "q_drop",
-      bankId: "bank_1",
-      order: 1,
-      stem: "同题",
-      answer: "A",
-    }, {
-      id: "q_other",
-      bankId: "bank_1",
-      order: 2,
-      stem: "另一题",
-      answer: "B",
-    }],
-    progressRows: [],
-  });
-
-  assert.deepEqual(plan.duplicateQuestionIds, ["q_drop"]);
-  assert.deepEqual(plan.affectedBankIds, ["bank_1"]);
 });
 
 test("practice question dedupe removes repeated local question records", () => {
