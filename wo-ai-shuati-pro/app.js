@@ -53,6 +53,7 @@ const state = {
   lastExamRecord: null,
   examReviewIndex: 0,
   bankFilter: "",
+  bankArchiveFilter: "active",
   cloudConfigured: cloud.configured,
   cloudUser: null,
   cloudProfile: null,
@@ -95,10 +96,10 @@ async function boot() {
   await initCloud();
   await refreshBanks();
   await refreshExamSessions();
-  if (state.currentBankId && state.banks.some((bank) => bank.id === state.currentBankId)) {
+  if (state.currentBankId && state.banks.some((bank) => bank.id === state.currentBankId && !bank.archived)) {
     await loadCurrentBank();
-  } else if (state.banks[0]) {
-    setCurrentBank(state.banks[0].id, false);
+  } else if (state.banks.find((bank) => !bank.archived)) {
+    setCurrentBank(state.banks.find((bank) => !bank.archived).id, false);
     await loadCurrentBank();
   }
   const sharedQuery = readSharedQuery();
@@ -177,6 +178,30 @@ async function handleViewClick(event) {
   }
   if (action === "delete-bank") {
     await deleteBank(id);
+  }
+  if (action === "archive-bank") {
+    await archiveBank(id);
+  }
+  if (action === "unarchive-bank") {
+    await unarchiveBank(id);
+  }
+  if (action === "archive-selected-banks") {
+    await archiveSelectedBanks();
+  }
+  if (action === "unarchive-selected-banks") {
+    await unarchiveSelectedBanks();
+  }
+  if (action === "show-active-banks") {
+    state.bankArchiveFilter = "active";
+    state.selectedBankIds.clear();
+    state.bankBulkMode = false;
+    render();
+  }
+  if (action === "show-archived-banks") {
+    state.bankArchiveFilter = "archived";
+    state.selectedBankIds.clear();
+    state.bankBulkMode = false;
+    render();
   }
   if (action === "start-bank-bulk") {
     state.bankBulkMode = true;
@@ -412,6 +437,8 @@ function renderBanks() {
   const banks = getFilteredBanks();
   const totalQuestions = state.banks.reduce((sum, bank) => sum + bank.questionCount, 0);
   const totalWrong = state.allProgress.filter((item) => item.wrongCount > 0).length;
+  const archivedCount = state.banks.filter((bank) => bank.archived).length;
+  const isArchivedView = state.bankArchiveFilter === "archived";
 
   view.innerHTML = `
     <section class="desktop-columns">
@@ -430,10 +457,16 @@ function renderBanks() {
           <div class="metric"><strong>${state.banks.length}</strong><span>题库</span></div>
           <div class="metric"><strong>${totalQuestions}</strong><span>总题数</span></div>
           <div class="metric"><strong>${totalWrong}</strong><span>错题</span></div>
+          ${archivedCount ? `<div class="metric"><strong>${archivedCount}</strong><span>已归档</span></div>` : ""}
         </section>
-        <div class="field">
-          <label for="bankSearch">搜索题库/标签</label>
-          <input id="bankSearch" type="search" value="${escapeAttr(state.bankFilter)}" placeholder="输入课程、章节或标签" />
+        <div class="bank-toolbar">
+          <div class="archive-toggle">
+            <button class="archive-toggle-btn ${!isArchivedView ? "is-active" : ""}" type="button" data-action="show-active-banks">活跃</button>
+            <button class="archive-toggle-btn ${isArchivedView ? "is-active" : ""}" type="button" data-action="show-archived-banks">已归档${archivedCount ? ` ${archivedCount}` : ""}</button>
+          </div>
+          <div class="field" style="flex:1;min-width:0;">
+            <input id="bankSearch" type="search" value="${escapeAttr(state.bankFilter)}" placeholder="输入课程、章节或标签" />
+          </div>
         </div>
         <div data-bank-bulk-bar>${renderBankBulkBarContent(banks)}</div>
         <div class="bank-list" data-bank-list>${renderBankListContent(banks)}</div>
@@ -499,22 +532,31 @@ function renderBankBulkBar() {
 function renderBankBulkBarContent(banks) {
   if (!state.bankBulkMode) return "";
   const selectedCount = banks.filter((bank) => state.selectedBankIds.has(bank.id)).length;
+  const isArchivedView = state.bankArchiveFilter === "archived";
   return `
     <div class="bulk-bar">
       <span class="subtle">已选择 ${selectedCount}/${banks.length} 个题库</span>
       <div class="actions bulk-actions">
         <button class="ghost-button" type="button" data-action="select-all-banks" ${banks.length ? "" : "disabled"}>全选</button>
         <button class="ghost-button" type="button" data-action="clear-bank-selection">完成</button>
-        <button class="danger-button" type="button" data-action="delete-selected-banks" ${state.selectedBankIds.size ? "" : "disabled"}>批量删除</button>
+        ${isArchivedView
+          ? `<button class="ghost-button" type="button" data-action="unarchive-selected-banks" ${state.selectedBankIds.size ? "" : "disabled"}>批量取消归档</button>
+             <button class="danger-button" type="button" data-action="delete-selected-banks" ${state.selectedBankIds.size ? "" : "disabled"}>批量删除</button>`
+          : `<button class="ghost-button" type="button" data-action="archive-selected-banks" ${state.selectedBankIds.size ? "" : "disabled"}>批量归档</button>
+             <button class="danger-button" type="button" data-action="delete-selected-banks" ${state.selectedBankIds.size ? "" : "disabled"}>批量删除</button>`
+        }
       </div>
     </div>
   `;
 }
 
 function renderBankListContent(banks) {
+  const isArchivedView = state.bankArchiveFilter === "archived";
   return banks.length
     ? banks.map(renderBankCard).join("")
-    : renderEmpty("还没有题库", "先导入一个 Excel 题库，就能开始刷题。");
+    : isArchivedView
+      ? renderEmpty("没有已归档题库", "归档的题库会显示在这里。")
+      : renderEmpty("还没有题库", "先导入一个 Excel 题库，就能开始刷题。");
 }
 
 function renderBankCard(bank) {
@@ -525,8 +567,9 @@ function renderBankCard(bank) {
   const chapter = cleanText(bank.chapter);
   const questionCount = bank.questionCount || bank.total || 0;
   const ownerUsername = getBankOwnerUsername(bank);
+  const isArchived = bank.archived;
   return `
-    <article class="bank-card">
+    <article class="bank-card${isArchived ? " archived" : ""}">
       <div class="bank-head bank-card-head">
         <div class="bank-title-wrap">
           <h3 class="bank-title">
@@ -542,6 +585,7 @@ function renderBankCard(bank) {
         </div>
         <div class="bank-head-actions">
           ${bank.id === state.currentBankId ? `<span class="type-pill good">当前</span>` : ""}
+          ${isArchived ? `<span class="type-pill">已归档</span>` : ""}
           ${bank.cloudId ? `<span class="type-pill">公开题库</span>` : ""}
           <button class="ghost-button edit-inline-button" type="button" data-action="edit-bank" data-id="${bank.id}">编辑</button>
         </div>
@@ -552,12 +596,18 @@ function renderBankCard(bank) {
       </div>
       <p class="bank-meta">已做 ${progress.done}/${questionCount} · 正确率 ${accuracy}% · 错题 ${progress.wrong}</p>
       <div class="actions bank-actions">
-        <button class="button" type="button" data-action="select-bank" data-id="${bank.id}">开始刷题</button>
-        <button class="ghost-button" type="button" data-action="open-bank" data-id="${bank.id}">设为当前</button>
-        <button class="ghost-button" type="button" data-action="view-stats" data-id="${bank.id}">考试记录</button>
-        ${bank.cloudId ? "" : `<button class="ghost-button" type="button" data-action="publish-bank" data-id="${bank.id}">公开发布</button>`}
-        ${bank.cloudId ? `<button class="ghost-button" type="button" data-action="copy-bank-id" data-id="${bank.cloudId}">复制ID</button>` : ""}
-        <button class="danger-button" type="button" data-action="delete-bank" data-id="${bank.id}">删除</button>
+        ${isArchived
+          ? `<button class="ghost-button" type="button" data-action="unarchive-bank" data-id="${bank.id}">取消归档</button>
+             <button class="ghost-button" type="button" data-action="view-stats" data-id="${bank.id}">考试记录</button>
+             <button class="danger-button" type="button" data-action="delete-bank" data-id="${bank.id}">删除</button>`
+          : `<button class="button" type="button" data-action="select-bank" data-id="${bank.id}">开始刷题</button>
+             <button class="ghost-button" type="button" data-action="open-bank" data-id="${bank.id}">设为当前</button>
+             <button class="ghost-button" type="button" data-action="view-stats" data-id="${bank.id}">考试记录</button>
+             ${bank.cloudId ? "" : `<button class="ghost-button" type="button" data-action="publish-bank" data-id="${bank.id}">公开发布</button>`}
+             ${bank.cloudId ? `<button class="ghost-button" type="button" data-action="copy-bank-id" data-id="${bank.cloudId}">复制ID</button>` : ""}
+             <button class="ghost-button" type="button" data-action="archive-bank" data-id="${bank.id}">归档</button>
+             <button class="danger-button" type="button" data-action="delete-bank" data-id="${bank.id}">删除</button>`
+        }
       </div>
     </article>
   `;
@@ -2390,6 +2440,11 @@ async function markMastered(questionId) {
 }
 
 async function selectBank(id, nextView) {
+  const bank = state.banks.find((item) => item.id === id);
+  if (bank?.archived) {
+    showToast("已归档的题库不能刷题，请先取消归档");
+    return;
+  }
   state.editingBankId = "";
   state.questionPickerOpen = false;
   setCurrentBank(id, true);
@@ -2530,11 +2585,89 @@ async function deleteBank(id) {
   }
   await refreshBanks();
   await refreshExamSessions();
-  if (!state.currentBankId && state.banks[0]) {
-    setCurrentBank(state.banks[0].id, true);
+  if (!state.currentBankId && state.banks.find((b) => !b.archived)) {
+    setCurrentBank(state.banks.find((b) => !b.archived).id, true);
     await loadCurrentBank();
   }
   render();
+}
+
+async function archiveBank(id) {
+  const bank = state.banks.find((item) => item.id === id);
+  if (!bank) return;
+  await putRecord(STORE_BANKS, { ...bank, archived: true, updatedAt: new Date().toISOString() });
+  if (state.currentBankId === id) {
+    state.currentBankId = "";
+    localStorage.removeItem(CURRENT_BANK_KEY);
+    state.questions = [];
+    state.progress = new Map();
+    resetPracticeQueue();
+  }
+  if (state.editingBankId === id) {
+    state.editingBankId = "";
+  }
+  state.selectedBankIds.delete(id);
+  await refreshBanks();
+  if (!state.currentBankId && state.banks.filter((b) => !b.archived)[0]) {
+    setCurrentBank(state.banks.filter((b) => !b.archived)[0].id, true);
+    await loadCurrentBank();
+  }
+  showToast(`已归档"${getBankTitle(bank)}"`);
+  render();
+}
+
+async function unarchiveBank(id) {
+  const bank = state.banks.find((item) => item.id === id);
+  if (!bank) return;
+  await putRecord(STORE_BANKS, { ...bank, archived: false, updatedAt: new Date().toISOString() });
+  await refreshBanks();
+  render();
+}
+
+async function archiveSelectedBanks() {
+  const ids = [...state.selectedBankIds].filter((id) => state.banks.some((bank) => bank.id === id && !bank.archived));
+  if (!ids.length) {
+    showToast("请先选择题库");
+    return;
+  }
+  for (const id of ids) {
+    const bank = state.banks.find((item) => item.id === id);
+    if (bank) await putRecord(STORE_BANKS, { ...bank, archived: true, updatedAt: new Date().toISOString() });
+    clearPracticeSession(id);
+    if (state.currentBankId === id) {
+      state.currentBankId = "";
+      localStorage.removeItem(CURRENT_BANK_KEY);
+      state.questions = [];
+      state.progress = new Map();
+      resetPracticeQueue();
+    }
+  }
+  state.selectedBankIds.clear();
+  state.bankBulkMode = false;
+  await refreshBanks();
+  if (!state.currentBankId && state.banks.filter((b) => !b.archived)[0]) {
+    setCurrentBank(state.banks.filter((b) => !b.archived)[0].id, true);
+    await loadCurrentBank();
+  }
+  showToast(`已归档 ${ids.length} 个题库`);
+  render();
+}
+
+async function unarchiveSelectedBanks() {
+  const ids = [...state.selectedBankIds].filter((id) => state.banks.some((bank) => bank.id === id && bank.archived));
+  if (!ids.length) {
+    showToast("请先选择题库");
+    return;
+  }
+  for (const id of ids) {
+    const bank = state.banks.find((item) => item.id === id);
+    if (bank) await putRecord(STORE_BANKS, { ...bank, archived: false, updatedAt: new Date().toISOString() });
+  }
+  state.selectedBankIds.clear();
+  state.bankBulkMode = false;
+  await refreshBanks();
+  render();
+  showToast(`已取消归档 ${ids.length} 个题库`);
 }
 
 async function deleteSelectedBanks() {
@@ -2562,8 +2695,8 @@ async function deleteSelectedBanks() {
   }
   await refreshBanks();
   await refreshExamSessions();
-  if (!state.currentBankId && state.banks[0]) {
-    setCurrentBank(state.banks[0].id, true);
+  if (!state.currentBankId && state.banks.find((b) => !b.archived)) {
+    setCurrentBank(state.banks.find((b) => !b.archived).id, true);
     await loadCurrentBank();
   } else if (state.currentBankId) {
     await loadCurrentBank();
@@ -2625,7 +2758,7 @@ async function importBackup(file) {
     if (imported.examSessions.length) await putMany(STORE_EXAM_SESSIONS, imported.examSessions);
     await refreshBanks();
     await refreshExamSessions();
-    state.currentBankId = imported.banks[0]?.id || state.banks[0]?.id || "";
+    state.currentBankId = imported.banks[0]?.id || state.banks.find((b) => !b.archived)?.id || "";
     if (state.currentBankId) localStorage.setItem(CURRENT_BANK_KEY, state.currentBankId);
     await loadCurrentBank();
     showToast(`已导入 ${imported.banks.length} 个题库`);
@@ -3079,9 +3212,12 @@ function getBankOwnerUsername(bank) {
 }
 
 function getFilteredBanks() {
+  let banks = state.banks;
+  if (state.bankArchiveFilter === "active") banks = banks.filter((bank) => !bank.archived);
+  else if (state.bankArchiveFilter === "archived") banks = banks.filter((bank) => bank.archived);
   const keyword = state.bankFilter.toLowerCase();
-  if (!keyword) return state.banks;
-  return state.banks.filter((bank) => {
+  if (!keyword) return banks;
+  return banks.filter((bank) => {
     const text = [getBankTitle(bank), bank.course, bank.chapter, ...(bank.tags || [])].join(" ").toLowerCase();
     return text.includes(keyword);
   });

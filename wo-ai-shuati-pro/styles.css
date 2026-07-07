@@ -676,6 +676,41 @@ h3 {
   padding: 12px;
 }
 
+.bank-card.archived {
+  opacity: 0.55;
+}
+
+/* Archive toggle */
+.bank-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.archive-toggle {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.archive-toggle-btn {
+  padding: 4px 12px;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.archive-toggle-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .bank-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
