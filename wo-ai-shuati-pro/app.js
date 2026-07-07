@@ -438,6 +438,7 @@ function renderBanks() {
   const totalQuestions = state.banks.reduce((sum, bank) => sum + bank.questionCount, 0);
   const totalWrong = state.allProgress.filter((item) => item.wrongCount > 0).length;
   const archivedCount = state.banks.filter((bank) => bank.archived).length;
+  const activeCount = state.banks.length - archivedCount;
   const isArchivedView = state.bankArchiveFilter === "archived";
 
   view.innerHTML = `
@@ -457,12 +458,11 @@ function renderBanks() {
           <div class="metric"><strong>${state.banks.length}</strong><span>题库</span></div>
           <div class="metric"><strong>${totalQuestions}</strong><span>总题数</span></div>
           <div class="metric"><strong>${totalWrong}</strong><span>错题</span></div>
-          ${archivedCount ? `<div class="metric"><strong>${archivedCount}</strong><span>已归档</span></div>` : ""}
         </section>
         <div class="bank-toolbar">
           <div class="archive-toggle">
-            <button class="archive-toggle-btn ${!isArchivedView ? "is-active" : ""}" type="button" data-action="show-active-banks">活跃</button>
-            <button class="archive-toggle-btn ${isArchivedView ? "is-active" : ""}" type="button" data-action="show-archived-banks">已归档${archivedCount ? ` ${archivedCount}` : ""}</button>
+            <button class="archive-toggle-btn ${!isArchivedView ? "is-active" : ""}" type="button" data-action="show-active-banks">活跃 ${activeCount}</button>
+            <button class="archive-toggle-btn ${isArchivedView ? "is-active" : ""}" type="button" data-action="show-archived-banks">已归档 ${archivedCount}</button>
           </div>
           <div class="field" style="flex:1;min-width:0;">
             <input id="bankSearch" type="search" value="${escapeAttr(state.bankFilter)}" placeholder="输入课程、章节或标签" />
