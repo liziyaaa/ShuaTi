@@ -153,9 +153,11 @@ export const cloud = {
     const trimmed = query.trim();
     let path = "/question_banks?visibility=eq.public&select=*&order=updated_at.desc&limit=50";
     if (trimmed) {
-      const escaped = encodeURIComponent(`%${trimmed}%`);
       const exact = encodeURIComponent(trimmed);
-      path += `&or=(id.eq.${exact},owner_username.ilike.${escaped},name.ilike.${escaped},course.ilike.${escaped},chapter.ilike.${escaped})`;
+      const patterns = buildSearchLikePatterns(trimmed).map((pattern) => encodeURIComponent(pattern));
+      const fields = ["owner_username", "name", "course", "chapter"];
+      const fuzzyTerms = patterns.flatMap((pattern) => fields.map((field) => `${field}.ilike.${pattern}`));
+      path += `&or=(id.eq.${exact},${fuzzyTerms.join(",")})`;
     }
     return restFetch(this.config, path, {
       method: "GET",
@@ -274,6 +276,14 @@ function normalizeConfig(config) {
     supabaseAnonKey: String(config.supabaseAnonKey || ""),
     appUrl: appUrl ? appUrl.replace(/\/?$/, "/") : "",
   };
+}
+
+function buildSearchLikePatterns(value) {
+  const trimmed = value.trim();
+  const compact = trimmed.replace(/\s+/g, "");
+  const patterns = [`%${trimmed}%`];
+  if (compact.length > 1) patterns.push(`%${[...compact].join("%")}%`);
+  return [...new Set(patterns)];
 }
 
 export function getMagicLinkRedirectUrl(config, locationLike = globalThis.location) {

@@ -26,6 +26,8 @@ const SESSION_MODE_KEY = "wo-ai-shuati-pro-session-mode";
 const ANSWER_FEEDBACK_KEY = "wo-ai-shuati-pro-answer-feedback";
 const THEME_KEY = "wo-ai-shuati-pro-theme";
 const APP_VERSION_KEY = "wo-ai-shuati-pro-app-version";
+const APP_UPDATE_DISMISSED_KEY = "wo-ai-shuati-pro-update-dismissed-version";
+const BANK_GROUPS_KEY = "wo-ai-shuati-pro-expanded-bank-course-groups";
 const APP_CACHE_PREFIX = "wo-ai-shuati-pro-";
 const SESSION_MODES = new Set(["practice", "exam"]);
 const ANSWER_FEEDBACK_MODES = new Set(["instant", "submit"]);
@@ -69,6 +71,7 @@ const state = {
   publicBankBulkMode: false,
   selectedBankIds: new Set(),
   selectedPublicBankIds: new Set(),
+  expandedBankCourseKeys: readStoredSet(BANK_GROUPS_KEY),
   questionPickerOpen: false,
   reviewGroups: [],
   reviewLoading: false,
@@ -77,8 +80,10 @@ const state = {
   appVersion: {
     current: localStorage.getItem(APP_VERSION_KEY) || "",
     latest: "",
+    notes: "",
     checking: true,
     updateAvailable: false,
+    promptVisible: false,
     error: "",
   },
 };
@@ -222,6 +227,9 @@ async function handleViewClick(event) {
     state.bankBulkMode = false;
     render();
   }
+  if (action === "toggle-bank-group") {
+    toggleBankCourseGroup(target.dataset.key);
+  }
   if (action === "delete-selected-banks") {
     await deleteSelectedBanks();
   }
@@ -345,6 +353,9 @@ async function handleViewClick(event) {
   if (action === "refresh-app") {
     await refreshAppAssets();
   }
+  if (action === "dismiss-update") {
+    dismissUpdatePrompt();
+  }
   if (action === "search-public") {
     await searchPublicBanks();
   }
@@ -431,6 +442,7 @@ function render() {
   if (state.view === "stats") renderStats();
   if (state.view === "settings") renderSettings();
   if (state.view === "account") renderAccount();
+  syncUpdatePrompt();
 }
 
 function renderBanks() {
@@ -553,10 +565,45 @@ function renderBankBulkBarContent(banks) {
 function renderBankListContent(banks) {
   const isArchivedView = state.bankArchiveFilter === "archived";
   return banks.length
-    ? banks.map(renderBankCard).join("")
+    ? renderBankCourseGroups(banks)
     : isArchivedView
       ? renderEmpty("没有已归档题库", "归档的题库会显示在这里。")
       : renderEmpty("还没有题库", "先导入一个 Excel 题库，就能开始刷题。");
+}
+
+function renderBankCourseGroups(banks) {
+  const groups = groupBanksByCourse(banks);
+  return groups.map((group) => {
+    if (group.banks.length === 1) return renderBankCard(group.banks[0]);
+    return renderBankCourseGroup(group);
+  }).join("");
+}
+
+function renderBankCourseGroup(group) {
+  const isExpanded = state.bankBulkMode || state.expandedBankCourseKeys.has(group.key);
+  const totalQuestions = group.banks.reduce((sum, bank) => sum + (bank.questionCount || bank.total || 0), 0);
+  const totalWrong = group.banks.reduce((sum, bank) => sum + getBankProgress(bank.id).wrong, 0);
+  const chapters = [...new Set(group.banks.map((bank) => cleanText(bank.chapter)).filter(Boolean))];
+  const tags = [...new Set(group.banks.flatMap((bank) => bank.tags || []).map(cleanText).filter(Boolean))].slice(0, 4);
+  const hasCurrent = group.banks.some((bank) => bank.id === state.currentBankId);
+  return `
+    <section class="bank-course-group">
+      <button class="bank-course-summary" type="button" data-action="toggle-bank-group" data-key="${escapeAttr(group.key)}" aria-expanded="${isExpanded ? "true" : "false"}">
+        <span class="bank-course-summary-main">
+          <span class="bank-course-summary-title">${escapeHtml(group.course)}</span>
+          <span class="bank-meta">${group.banks.length} 个题库 · ${totalQuestions} 题 · 错题 ${totalWrong}</span>
+          ${chapters.length ? `<span class="bank-meta">章节：${escapeHtml(chapters.slice(0, 5).join("、"))}${chapters.length > 5 ? "…" : ""}</span>` : ""}
+          ${tags.length ? `<span class="tag-row course-group-tags">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>` : ""}
+        </span>
+        <span class="bank-course-summary-side">
+          ${hasCurrent ? `<span class="type-pill good">当前</span>` : ""}
+          <span class="type-pill">${isExpanded ? "收起" : "展开"}</span>
+          <span class="course-group-arrow" aria-hidden="true">${isExpanded ? "⌃" : "⌄"}</span>
+        </span>
+      </button>
+      ${isExpanded ? `<div class="bank-course-group-body">${group.banks.map(renderBankCard).join("")}</div>` : ""}
+    </section>
+  `;
 }
 
 function renderBankCard(bank) {
@@ -791,6 +838,7 @@ function renderAccount() {
 function renderVersionPanel() {
   const version = state.appVersion;
   const label = version.current || version.latest || "未知";
+  const note = version.notes ? `更新说明：${version.notes}` : "";
   const status = version.checking
     ? "正在检查更新"
     : version.updateAvailable
@@ -804,8 +852,28 @@ function renderVersionPanel() {
         <span class="version-label">当前版本</span>
         <strong>${escapeHtml(label)}</strong>
         <p class="subtle">${escapeHtml(status)}</p>
+        ${note ? `<p class="version-note">${escapeHtml(note)}</p>` : ""}
       </div>
       ${version.updateAvailable ? `<button class="button small-button" type="button" data-action="refresh-app">立即更新</button>` : ""}
+    </section>
+  `;
+}
+
+function renderUpdatePrompt() {
+  const version = state.appVersion;
+  const notes = version.notes || "优化题库管理、搜索和使用体验。";
+  return `
+    <section class="update-prompt-root" data-update-prompt-root>
+      <div class="update-prompt-backdrop"></div>
+      <article class="update-prompt-card" role="dialog" aria-modal="true" aria-labelledby="updatePromptTitle">
+        <span class="version-label">发现新版本</span>
+        <h2 id="updatePromptTitle">${escapeHtml(version.latest || "新版本")}</h2>
+        <p class="subtle">${escapeHtml(notes)}</p>
+        <div class="actions update-prompt-actions">
+          <button class="ghost-button" type="button" data-action="dismiss-update">不再提示</button>
+          <button class="button" type="button" data-action="refresh-app">立即更新</button>
+        </div>
+      </article>
     </section>
   `;
 }
@@ -3215,12 +3283,31 @@ function getFilteredBanks() {
   let banks = state.banks;
   if (state.bankArchiveFilter === "active") banks = banks.filter((bank) => !bank.archived);
   else if (state.bankArchiveFilter === "archived") banks = banks.filter((bank) => bank.archived);
-  const keyword = state.bankFilter.toLowerCase();
+  const keyword = state.bankFilter;
   if (!keyword) return banks;
   return banks.filter((bank) => {
-    const text = [getBankTitle(bank), bank.course, bank.chapter, ...(bank.tags || [])].join(" ").toLowerCase();
-    return text.includes(keyword);
+    const text = [getBankTitle(bank), bank.course, bank.name, bank.chapter, bank.id, bank.cloudId, getBankOwnerUsername(bank), ...(bank.tags || [])].join(" ");
+    return matchesSearchText(text, keyword);
   });
+}
+
+function groupBanksByCourse(banks) {
+  const groups = new Map();
+  for (const bank of banks) {
+    const course = getBankTitle(bank);
+    const key = normalizeSearchText(course) || "untitled";
+    if (!groups.has(key)) groups.set(key, { key, course, banks: [] });
+    groups.get(key).banks.push(bank);
+  }
+  return [...groups.values()];
+}
+
+function toggleBankCourseGroup(key) {
+  if (!key) return;
+  if (state.expandedBankCourseKeys.has(key)) state.expandedBankCourseKeys.delete(key);
+  else state.expandedBankCourseKeys.add(key);
+  writeStoredSet(BANK_GROUPS_KEY, state.expandedBankCourseKeys);
+  renderBankList();
 }
 
 function getBankTitle(bank) {
@@ -3294,6 +3381,50 @@ function sortLetters(value) {
 
 function splitTags(value) {
   return cleanText(value).split(/[，,、\s]+/).map(cleanText).filter(Boolean);
+}
+
+function matchesSearchText(text, query) {
+  const haystack = normalizeSearchText(text);
+  const tokens = splitSearchTokens(query);
+  if (!haystack || !tokens.length) return true;
+  return tokens.every((token) => haystack.includes(token) || isSubsequence(token, haystack));
+}
+
+function splitSearchTokens(value) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return [];
+  return cleanText(value)
+    .toLowerCase()
+    .split(/[\s,，、;；/|]+/)
+    .map(normalizeSearchText)
+    .filter(Boolean);
+}
+
+function normalizeSearchText(value) {
+  return cleanText(value).toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, "");
+}
+
+function isSubsequence(needle, haystack) {
+  if (!needle) return true;
+  let index = 0;
+  for (const char of haystack) {
+    if (char === needle[index]) index += 1;
+    if (index === needle.length) return true;
+  }
+  return false;
+}
+
+function readStoredSet(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "[]");
+    return new Set(Array.isArray(value) ? value.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeStoredSet(key, set) {
+  localStorage.setItem(key, JSON.stringify([...set]));
 }
 
 function normalizeUsername(value) {
@@ -3414,17 +3545,23 @@ async function checkAppVersion() {
     if (!response.ok) throw new Error(`version.json ${response.status}`);
     const manifest = await response.json();
     const latest = String(manifest.version || "").trim();
+    // 版本提示约定：以后发布新版本时同步更新 version.json 的 version 和 notes。
+    // notes 会显示在“我的”版本卡片里，也会作为首次打开时的简短更新说明。
+    const notes = cleanText(manifest.notes || "");
     if (!latest) throw new Error("version.json 缺少 version 字段");
     const current = localStorage.getItem(APP_VERSION_KEY) || "";
+    state.appVersion.notes = notes;
     if (!current) {
       localStorage.setItem(APP_VERSION_KEY, latest);
       state.appVersion.current = latest;
       state.appVersion.latest = latest;
       state.appVersion.updateAvailable = false;
+      state.appVersion.promptVisible = false;
     } else {
       state.appVersion.current = current;
       state.appVersion.latest = latest;
       state.appVersion.updateAvailable = current !== latest;
+      state.appVersion.promptVisible = shouldShowUpdatePrompt(current, latest);
     }
   } catch (error) {
     console.warn("版本检查失败", error);
@@ -3432,11 +3569,29 @@ async function checkAppVersion() {
   } finally {
     state.appVersion.checking = false;
     rerenderAccountVersion();
+    syncUpdatePrompt();
   }
 }
 
 function rerenderAccountVersion() {
   if (state.view === "account") render();
+}
+
+function shouldShowUpdatePrompt(current, latest) {
+  if (!current || !latest || current === latest) return false;
+  return localStorage.getItem(APP_UPDATE_DISMISSED_KEY) !== latest;
+}
+
+function dismissUpdatePrompt() {
+  if (state.appVersion.latest) localStorage.setItem(APP_UPDATE_DISMISSED_KEY, state.appVersion.latest);
+  state.appVersion.promptVisible = false;
+  syncUpdatePrompt();
+}
+
+function syncUpdatePrompt() {
+  view.querySelector("[data-update-prompt-root]")?.remove();
+  if (!state.appVersion.promptVisible) return;
+  view.insertAdjacentHTML("beforeend", renderUpdatePrompt());
 }
 
 async function refreshAppAssets() {

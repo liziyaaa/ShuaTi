@@ -445,6 +445,13 @@ h3 {
   margin: 2px 0 0;
 }
 
+.version-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .version-label {
   color: var(--muted);
   font-size: 12px;
@@ -455,6 +462,43 @@ h3 {
   min-height: 32px;
   padding: 7px 11px;
   white-space: nowrap;
+}
+
+.update-prompt-root {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.update-prompt-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.update-prompt-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  width: min(100%, 360px);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+}
+
+.update-prompt-card h2 {
+  margin-bottom: 0;
+}
+
+.update-prompt-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 4px;
 }
 
 .authors-footer {
@@ -678,6 +722,63 @@ h3 {
 
 .bank-card.archived {
   opacity: 0.55;
+}
+
+.bank-course-group {
+  display: grid;
+  gap: 10px;
+}
+
+.bank-course-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bank-course-summary-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.bank-course-summary-title {
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.bank-course-summary-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.course-group-arrow {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.course-group-tags {
+  margin-top: 4px;
+}
+
+.bank-course-group-body {
+  display: grid;
+  gap: 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--surface-soft);
 }
 
 /* Archive toggle */
