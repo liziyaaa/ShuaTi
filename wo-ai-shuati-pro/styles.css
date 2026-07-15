@@ -863,6 +863,44 @@ h3 {
   border-left: 3px solid var(--surface-soft);
 }
 
+.public-owner-group,
+.public-owner-body {
+  display: grid;
+  gap: 10px;
+}
+
+.public-owner-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.public-owner-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.public-owner-title {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.public-owner-body {
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
 /* Archive toggle */
 .bank-toolbar {
   display: flex;

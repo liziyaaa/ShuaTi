@@ -4,6 +4,7 @@ import {
   buildReviewExport,
   buildReviewGroups,
   calculateBankProgress,
+  compareChapterLabels,
   dedupeQuestionsForPractice,
   findSavedPublicBank,
   getPublishBlocker,
@@ -72,6 +73,8 @@ const state = {
   selectedBankIds: new Set(),
   selectedPublicBankIds: new Set(),
   expandedBankCourseKeys: readStoredSet(BANK_GROUPS_KEY),
+  expandedPublicCourseKeys: new Set(),
+  expandedPublicOwnerKeys: new Set(),
   questionPickerOpen: false,
   reviewGroups: [],
   reviewLoading: false,
@@ -371,6 +374,14 @@ async function handleViewClick(event) {
   }
   if (action === "start-public-bank-bulk") {
     state.publicBankBulkMode = true;
+    render();
+  }
+  if (action === "toggle-public-course") {
+    toggleExpandedKey(state.expandedPublicCourseKeys, target.dataset.key);
+    render();
+  }
+  if (action === "toggle-public-owner") {
+    toggleExpandedKey(state.expandedPublicOwnerKeys, target.dataset.key);
     render();
   }
   if (action === "toggle-public-bank-selection") {
@@ -758,7 +769,7 @@ function renderDiscover() {
     ${!state.discoverLoading && state.publicBanks.length ? renderPublicBankBulkControls() : ""}
     <section class="bank-list">
       ${state.discoverLoading ? renderEmpty("正在搜索", "稍等一下。") : ""}
-      ${!state.discoverLoading && state.publicBanks.length ? state.publicBanks.map(renderPublicBankCard).join("") : ""}
+      ${!state.discoverLoading && state.publicBanks.length ? renderPublicBankGroups(state.publicBanks) : ""}
       ${!state.discoverLoading && !state.publicBanks.length ? renderEmpty("暂无结果", state.cloudConfigured ? "输入用户名或题库 ID 后搜索。" : "先在 config.js 配置 Supabase。") : ""}
     </section>
   `;
@@ -799,20 +810,68 @@ function renderProfilePreview(profile) {
   `;
 }
 
-function renderPublicBankCard(bank) {
-  const tags = [bank.course, bank.chapter, ...(bank.tags || [])].filter(Boolean);
+function renderPublicBankGroups(banks) {
+  return groupPublicBanksByCourseAndOwner(banks).map(renderPublicCourseGroup).join("");
+}
+
+function renderPublicCourseGroup(group) {
+  const expanded = state.publicBankBulkMode || state.expandedPublicCourseKeys.has(group.key);
+  const totalQuestions = group.owners.reduce((sum, owner) => (
+    sum + owner.banks.reduce((ownerSum, bank) => ownerSum + (bank.question_count || 0), 0)
+  ), 0);
+  return `
+    <section class="bank-course-group public-course-group">
+      <button class="bank-course-summary" type="button" data-action="toggle-public-course" data-key="${escapeAttr(group.key)}" aria-expanded="${expanded ? "true" : "false"}">
+        <span class="bank-course-summary-main">
+          <span class="bank-course-summary-title">${escapeHtml(group.course)}</span>
+          <span class="bank-meta">${group.owners.length} 位发布者 · ${group.bankCount} 个题库 · ${totalQuestions} 题</span>
+        </span>
+        <span class="bank-course-summary-side">
+          <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+          <span class="course-group-arrow" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+        </span>
+      </button>
+      ${expanded ? `<div class="bank-course-group-body public-course-body">${group.owners.map(renderPublicOwnerGroup).join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderPublicOwnerGroup(group) {
+  const expanded = state.publicBankBulkMode || state.expandedPublicOwnerKeys.has(group.key);
+  const totalQuestions = group.banks.reduce((sum, bank) => sum + (bank.question_count || 0), 0);
+  const chapters = [...new Set(group.banks.map((bank) => getBankChapterLabel(bank)))];
+  return `
+    <section class="public-owner-group">
+      <button class="public-owner-summary" type="button" data-action="toggle-public-owner" data-key="${escapeAttr(group.key)}" aria-expanded="${expanded ? "true" : "false"}">
+        <span class="public-owner-main">
+          <span class="public-owner-title">@${escapeHtml(group.username)}</span>
+          <span class="bank-meta">${group.banks.length} 个题库 · ${totalQuestions} 题</span>
+          <span class="bank-meta">章节：${escapeHtml(chapters.slice(0, 5).join("、"))}${chapters.length > 5 ? "…" : ""}</span>
+        </span>
+        <span class="bank-course-summary-side">
+          <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+          <span class="course-group-arrow" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+        </span>
+      </button>
+      ${expanded ? `<div class="public-owner-body">${group.banks.map((bank) => renderPublicBankCard(bank, { grouped: true })).join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderPublicBankCard(bank, { grouped = false } = {}) {
+  const tags = grouped ? [...(bank.tags || [])].filter(Boolean) : [bank.course, bank.chapter, ...(bank.tags || [])].filter(Boolean);
   const saved = findSavedPublicBank(state.banks, bank.id);
   const saveLabel = saved ? "打开本地副本" : "保存到我的题库";
   return `
     <article class="bank-card">
       <div class="bank-head">
         <div>
-          <h3 class="bank-title">${escapeHtml(getBankTitle(bank))}</h3>
+          <h3 class="bank-title">${escapeHtml(grouped ? getBankChapterLabel(bank) : getBankTitle(bank))}</h3>
           <p class="bank-meta">${bank.question_count || 0} 题 · 作者 @${escapeHtml(bank.owner_username || "unknown")} · ID ${escapeHtml(bank.id)}</p>
         </div>
         <div class="bank-head-actions">
           ${state.publicBankBulkMode ? `<label class="select-check" title="选择公开题库">
-            <input type="checkbox" data-action="toggle-public-bank-selection" data-id="${bank.id}" ${state.selectedPublicBankIds.has(bank.id) ? "checked" : ""} />
+            <input type="checkbox" data-action="toggle-public-bank-selection" data-id="${escapeAttr(bank.id)}" ${state.selectedPublicBankIds.has(bank.id) ? "checked" : ""} />
             <span></span>
           </label>` : ""}
           <span class="type-pill good">公开</span>
@@ -820,9 +879,9 @@ function renderPublicBankCard(bank) {
       </div>
       ${tags.length ? `<div class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
       <div class="actions">
-        <button class="button" type="button" data-action="use-public-bank" data-id="${bank.id}">${saveLabel}</button>
+        <button class="button" type="button" data-action="use-public-bank" data-id="${escapeAttr(bank.id)}">${saveLabel}</button>
         <button class="ghost-button" type="button" data-action="open-owner" data-username="${escapeAttr(bank.owner_username || "")}">看主页</button>
-        <button class="ghost-button" type="button" data-action="copy-bank-id" data-id="${bank.id}">复制ID</button>
+        <button class="ghost-button" type="button" data-action="copy-bank-id" data-id="${escapeAttr(bank.id)}">复制ID</button>
       </div>
     </article>
   `;
@@ -1765,6 +1824,8 @@ async function searchPublicBanks() {
   state.publicBanks = [];
   state.selectedPublicBankIds.clear();
   state.publicBankBulkMode = false;
+  state.expandedPublicCourseKeys.clear();
+  state.expandedPublicOwnerKeys.clear();
   state.discoverProfile = null;
   render();
   try {
@@ -3400,7 +3461,10 @@ function groupBanksByCourse(banks) {
     if (!groups.has(key)) groups.set(key, { key, course, banks: [] });
     groups.get(key).banks.push(bank);
   }
-  return [...groups.values()];
+  return [...groups.values()].map((group) => ({
+    ...group,
+    banks: [...group.banks].sort((a, b) => compareChapterLabels(a.chapter, b.chapter)),
+  }));
 }
 
 function groupReviewGroupsByCourse(reviewGroups) {
@@ -3411,7 +3475,38 @@ function groupReviewGroupsByCourse(reviewGroups) {
     if (!groups.has(key)) groups.set(key, { key, course, groups: [] });
     groups.get(key).groups.push(reviewGroup);
   }
-  return [...groups.values()];
+  return [...groups.values()].map((group) => ({
+    ...group,
+    groups: [...group.groups].sort((a, b) => compareChapterLabels(a.bank.chapter, b.bank.chapter)),
+  }));
+}
+
+function groupPublicBanksByCourseAndOwner(banks) {
+  const courses = new Map();
+  for (const bank of banks) {
+    const course = getBankTitle(bank);
+    const courseKey = normalizeSearchText(course) || "untitled";
+    const username = getBankOwnerUsername(bank) || "unknown";
+    const ownerKey = `${courseKey}::${normalizeSearchText(username) || "unknown"}`;
+    if (!courses.has(courseKey)) courses.set(courseKey, { key: courseKey, course, owners: new Map(), bankCount: 0 });
+    const courseGroup = courses.get(courseKey);
+    if (!courseGroup.owners.has(ownerKey)) courseGroup.owners.set(ownerKey, { key: ownerKey, username, banks: [] });
+    courseGroup.owners.get(ownerKey).banks.push(bank);
+    courseGroup.bankCount += 1;
+  }
+  return [...courses.values()].map((course) => ({
+    ...course,
+    owners: [...course.owners.values()].map((owner) => ({
+      ...owner,
+      banks: [...owner.banks].sort((a, b) => compareChapterLabels(a.chapter, b.chapter)),
+    })),
+  }));
+}
+
+function toggleExpandedKey(set, key) {
+  if (!key) return;
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
 }
 
 function toggleBankCourseGroup(key) {

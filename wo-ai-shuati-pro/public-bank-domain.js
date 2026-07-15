@@ -2,6 +2,53 @@ export function isProfileComplete(profile) {
   return Boolean(String(profile?.username || "").trim() && String(profile?.display_name || "").trim());
 }
 
+export function compareChapterLabels(left, right) {
+  const a = buildChapterSortKey(left);
+  const b = buildChapterSortKey(right);
+  if (a.category !== b.category) return a.category - b.category;
+  const length = Math.max(a.numbers.length, b.numbers.length);
+  for (let index = 0; index < length; index += 1) {
+    if (a.numbers[index] === undefined) return -1;
+    if (b.numbers[index] === undefined) return 1;
+    if (a.numbers[index] !== b.numbers[index]) return a.numbers[index] - b.numbers[index];
+  }
+  return a.text.localeCompare(b.text, "zh-CN", { numeric: true, sensitivity: "base" });
+}
+
+function buildChapterSortKey(value) {
+  const text = String(value || "").trim();
+  if (!text) return { category: 4, numbers: [], text };
+  if (/(?:导论|绪论|前言|引言|概论)/.test(text)) return { category: 0, numbers: [], text };
+
+  const arabicNumbers = [...text.matchAll(/\d+(?:\.\d+)*/g)]
+    .flatMap((match) => match[0].split(".").map(Number));
+  if (arabicNumbers.length) return { category: 1, numbers: arabicNumbers, text };
+
+  const chineseNumberPattern = /(?:第\s*)?([零〇一二两三四五六七八九十百千]+)\s*(?=章|节|单元|篇|部分)/g;
+  const chineseNumbers = [...text.matchAll(chineseNumberPattern)].map((match) => parseChineseNumber(match[1]));
+  if (chineseNumbers.length) return { category: 1, numbers: chineseNumbers, text };
+
+  const chinesePrefix = text.match(/^([零〇一二两三四五六七八九十百千]+)(?:\s*[、.．]|$)/);
+  if (chinesePrefix) return { category: 1, numbers: [parseChineseNumber(chinesePrefix[1])], text };
+  return { category: 3, numbers: [], text };
+}
+
+function parseChineseNumber(value) {
+  const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const units = { 十: 10, 百: 100, 千: 1000 };
+  let total = 0;
+  let current = 0;
+  for (const character of value) {
+    if (Object.hasOwn(digits, character)) {
+      current = digits[character];
+    } else if (Object.hasOwn(units, character)) {
+      total += (current || 1) * units[character];
+      current = 0;
+    }
+  }
+  return total + current;
+}
+
 export function getPublishBlocker({ cloudConfigured, cloudUser, cloudProfile }) {
   if (!cloudConfigured) return "请先配置 Supabase";
   if (!cloudUser) return "请先登录";
@@ -97,10 +144,27 @@ export function buildReviewGroups({ banks, questions, progressRows }) {
     if (progress.wrongCount > 0) group.wrongQuestions.push(item);
     if (progress.favorite) group.favoriteQuestions.push(item);
   });
-  return [...groups.values()].sort((a, b) => {
+  return [...groups.values()].map((group) => ({
+    ...group,
+    wrongQuestions: [...group.wrongQuestions].sort(compareReviewItems),
+    favoriteQuestions: [...group.favoriteQuestions].sort(compareReviewItems),
+  })).sort((a, b) => {
     const aTime = a.bank.lastStudiedAt || a.bank.updatedAt || "";
     const bTime = b.bank.lastStudiedAt || b.bank.updatedAt || "";
     return bTime.localeCompare(aTime);
+  });
+}
+
+function compareReviewItems(a, b) {
+  const aOrder = Number(a.question?.order);
+  const bOrder = Number(b.question?.order);
+  const aHasOrder = Number.isFinite(aOrder) && aOrder > 0;
+  const bHasOrder = Number.isFinite(bOrder) && bOrder > 0;
+  if (aHasOrder && bHasOrder && aOrder !== bOrder) return aOrder - bOrder;
+  if (aHasOrder !== bHasOrder) return aHasOrder ? -1 : 1;
+  return String(a.question?.stem || "").localeCompare(String(b.question?.stem || ""), "zh-CN", {
+    numeric: true,
+    sensitivity: "base",
   });
 }
 

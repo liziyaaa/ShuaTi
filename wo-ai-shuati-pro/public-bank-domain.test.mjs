@@ -6,6 +6,7 @@ import {
   buildReviewExport,
   buildReviewGroups,
   calculateBankProgress,
+  compareChapterLabels,
   dedupeQuestionsForPractice,
   buildSavedBankRelation,
   getPublishBlocker,
@@ -13,6 +14,14 @@ import {
   mapCloudProgressToLocal,
   mergeProgressRows,
 } from "./public-bank-domain.js";
+
+test("chapter labels sort from introductory sections through natural chapter numbers", () => {
+  const labels = ["专题二", "第十一章", "1.2.3章", "导论", "第二章", "", "第十章", "第一章"];
+  assert.deepEqual(
+    [...labels].sort(compareChapterLabels),
+    ["导论", "第一章", "1.2.3章", "第二章", "第十章", "第十一章", "专题二", ""],
+  );
+});
 
 test("publish blocker asks for a generic login before provider-specific profile setup", () => {
   assert.equal(
@@ -238,15 +247,23 @@ test("review groups include wrong and favorite questions per existing bank", () 
     questions: [{
       id: "q_1",
       bankId: "bank_1",
+      order: 2,
       stem: "错题",
     }, {
       id: "q_2",
       bankId: "bank_1",
+      order: 1,
       stem: "收藏",
     }, {
       id: "q_3",
       bankId: "bank_2",
+      order: 3,
       stem: "错题且收藏",
+    }, {
+      id: "q_4",
+      bankId: "bank_2",
+      order: 1,
+      stem: "更早的错题",
     }],
     progressRows: [{
       questionId: "q_1",
@@ -264,6 +281,11 @@ test("review groups include wrong and favorite questions per existing bank", () 
       wrongCount: 1,
       favorite: true,
     }, {
+      questionId: "q_4",
+      bankId: "bank_2",
+      wrongCount: 1,
+      favorite: false,
+    }, {
       questionId: "orphan_q",
       bankId: "bank_1",
       wrongCount: 9,
@@ -273,7 +295,7 @@ test("review groups include wrong and favorite questions per existing bank", () 
 
   assert.equal(groups.length, 2);
   assert.equal(groups[0].bank.id, "bank_2");
-  assert.deepEqual(groups[0].wrongQuestions.map((item) => item.question.id), ["q_3"]);
+  assert.deepEqual(groups[0].wrongQuestions.map((item) => item.question.id), ["q_4", "q_3"]);
   assert.deepEqual(groups[0].favoriteQuestions.map((item) => item.question.id), ["q_3"]);
   assert.equal(groups[1].bank.id, "bank_1");
   assert.deepEqual(groups[1].wrongQuestions.map((item) => item.question.id), ["q_1"]);
