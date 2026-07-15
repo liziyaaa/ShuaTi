@@ -76,6 +76,7 @@ const state = {
   reviewGroups: [],
   reviewLoading: false,
   reviewLoaded: false,
+  expandedReviewCourseKeys: new Set(),
   expandedReviewBankIds: new Set(),
   appVersion: {
     current: localStorage.getItem(APP_VERSION_KEY) || "",
@@ -303,6 +304,9 @@ async function handleViewClick(event) {
   if (action === "next-question") {
     nextQuestion();
   }
+  if (action === "previous-question") {
+    previousQuestion();
+  }
   if (action === "toggle-favorite") {
     await toggleFavorite(target.dataset.questionId);
   }
@@ -328,6 +332,9 @@ async function handleViewClick(event) {
   }
   if (action === "toggle-review-bank") {
     toggleReviewBank(id);
+  }
+  if (action === "toggle-review-course") {
+    toggleReviewCourse(target.dataset.key);
   }
   if (action === "master-question") {
     await markMastered(target.dataset.questionId);
@@ -866,10 +873,16 @@ function renderUpdatePrompt() {
     <section class="update-prompt-root" data-update-prompt-root>
       <div class="update-prompt-backdrop"></div>
       <article class="update-prompt-card" role="dialog" aria-modal="true" aria-labelledby="updatePromptTitle">
-        <span class="version-label">发现新版本</span>
-        <h2 id="updatePromptTitle">${escapeHtml(version.latest || "新版本")}</h2>
-        <p class="subtle">${escapeHtml(notes)}</p>
-        <div class="actions update-prompt-actions">
+        <div class="update-prompt-heading">
+          <span class="update-prompt-badge">版本更新</span>
+          <h2 id="updatePromptTitle">发现新版本</h2>
+          <strong class="update-prompt-version">${escapeHtml(version.latest || "新版本")}</strong>
+        </div>
+        <div class="update-prompt-note">
+          <span>本次更新</span>
+          <p>${escapeHtml(notes)}</p>
+        </div>
+        <div class="update-prompt-actions">
           <button class="ghost-button" type="button" data-action="dismiss-update">不再提示</button>
           <button class="button" type="button" data-action="refresh-app">立即更新</button>
         </div>
@@ -892,10 +905,35 @@ function renderPublishedBankManager() {
         ${username ? `<span class="type-pill">@${escapeHtml(username)}</span>` : ""}
       </div>
       <div class="bank-list">
-        ${publishedBanks.length ? publishedBanks.map(renderPublishedBankItem).join("") : renderEmpty("暂无已发布题库", "在题库页首次公开发布后，会出现在这里统一管理。")}
+        ${publishedBanks.length ? renderPublishedBankCourseGroups(publishedBanks) : renderEmpty("暂无已发布题库", "在题库页首次公开发布后，会出现在这里统一管理。")}
       </div>
     </section>
   `;
+}
+
+function renderPublishedBankCourseGroups(banks) {
+  return groupBanksByCourse(banks).map((group) => {
+    const storageKey = `published:${group.key}`;
+    const expanded = state.expandedBankCourseKeys.has(storageKey);
+    const totalQuestions = group.banks.reduce((sum, bank) => sum + (bank.questionCount || bank.total || 0), 0);
+    const chapters = [...new Set(group.banks.map((bank) => getBankChapterLabel(bank)))];
+    return `
+      <section class="bank-course-group published-course-group">
+        <button class="bank-course-summary" type="button" data-action="toggle-bank-group" data-key="${escapeAttr(storageKey)}" aria-expanded="${expanded ? "true" : "false"}">
+          <span class="bank-course-summary-main">
+            <span class="bank-course-summary-title">${escapeHtml(group.course)}</span>
+            <span class="bank-meta">${group.banks.length} 个题库 · ${totalQuestions} 题</span>
+            <span class="bank-meta">章节：${escapeHtml(chapters.slice(0, 5).join("、"))}${chapters.length > 5 ? "…" : ""}</span>
+          </span>
+          <span class="bank-course-summary-side">
+            <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+            <span class="course-group-arrow" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+          </span>
+        </button>
+        ${expanded ? `<div class="bank-course-group-body">${group.banks.map(renderPublishedBankItem).join("")}</div>` : ""}
+      </section>
+    `;
+  }).join("");
 }
 
 function renderPublishedBankItem(bank) {
@@ -906,7 +944,7 @@ function renderPublishedBankItem(bank) {
     <article class="list-item published-bank-item">
       <div class="bank-head">
         <div>
-          <strong>${escapeHtml(getBankTitle(bank))}</strong>
+          <strong>${escapeHtml(getBankChapterLabel(bank))}</strong>
           <p class="subtle">${questionCount} 题 · 发布者 @${escapeHtml(ownerUsername || "unknown")} · ${formatDateTime(bank.updatedAt || bank.createdAt)}</p>
           <p class="bank-owner-line">公开 ID ${escapeHtml(bank.cloudId || "")}</p>
         </div>
@@ -1166,7 +1204,7 @@ function renderQuestionCard(question) {
       <p class="stem">${escapeHtml(question.stem)}</p>
       ${question.type === "fill" ? renderFillInput() : `<div class="option-list">${question.options.map((option) => renderOption(question, option)).join("")}</div>`}
       <div class="actions question-actions">
-        <button class="ghost-button" type="button" data-action="start-practice">重新开始</button>
+        <button class="ghost-button" type="button" data-action="previous-question" ${state.queueIndex > 0 ? "" : "disabled"}>上一题</button>
         ${renderQuestionPrimaryAction({ isExam, isLastQuestion })}
       </div>
       ${state.submitted && result && !isExam ? renderResult(question, result) : ""}
@@ -1315,7 +1353,7 @@ function renderWrong() {
   view.innerHTML = `
     <section class="panel">
       <h2>错题与收藏</h2>
-      <p class="subtle">按题库整理练习过的错题和收藏题，点击题库可展开明细。</p>
+      <p class="subtle">按课程和章节整理错题与收藏，依次展开后查看题目。</p>
       <div class="metric-row">
         <div class="metric compact-metric"><strong>${totalWrong}</strong><span>错题</span></div>
         <div class="metric compact-metric"><strong>${totalFavorite}</strong><span>收藏</span></div>
@@ -1324,32 +1362,63 @@ function renderWrong() {
     </section>
     <section class="bank-list">
       ${state.reviewLoading ? renderEmpty("正在整理", "正在读取本地题库记录。") : ""}
-      ${!state.reviewLoading && state.reviewGroups.length ? state.reviewGroups.map(renderReviewGroup).join("") : ""}
+      ${!state.reviewLoading && state.reviewGroups.length ? renderReviewCourseGroups(state.reviewGroups) : ""}
       ${!state.reviewLoading && !state.reviewGroups.length ? renderEmpty("暂无错题和收藏", "答错或收藏过的题会按题库出现在这里。") : ""}
     </section>
   `;
 }
 
-function renderReviewGroup(group) {
+function renderReviewCourseGroups(reviewGroups) {
+  return groupReviewGroupsByCourse(reviewGroups).map(renderReviewCourseGroup).join("");
+}
+
+function renderReviewCourseGroup(courseGroup) {
+  const expanded = state.expandedReviewCourseKeys.has(courseGroup.key);
+  const wrongCount = courseGroup.groups.reduce((sum, group) => sum + group.wrongQuestions.length, 0);
+  const favoriteCount = courseGroup.groups.reduce((sum, group) => sum + group.favoriteQuestions.length, 0);
+  return `
+    <section class="bank-course-group review-course-group">
+      <button class="bank-course-summary review-course-summary" type="button" data-action="toggle-review-course" data-key="${escapeAttr(courseGroup.key)}" aria-expanded="${expanded ? "true" : "false"}">
+        <span class="bank-course-summary-main">
+          <span class="bank-course-summary-title">${escapeHtml(courseGroup.course)}</span>
+          <span class="bank-meta">${courseGroup.groups.length} 个章节 · ${wrongCount} 道错题 · ${favoriteCount} 道收藏题</span>
+        </span>
+        <span class="bank-course-summary-side">
+          <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+          <span class="course-group-arrow" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+        </span>
+      </button>
+      ${expanded ? `<div class="bank-course-group-body review-course-body">${courseGroup.groups.map(renderReviewChapter).join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderReviewChapter(group) {
   const wrongCount = group.wrongQuestions.length;
   const favoriteCount = group.favoriteQuestions.length;
   const expanded = state.expandedReviewBankIds.has(group.bank.id);
   return `
-    <article class="panel review-bank-card">
+    <article class="panel review-bank-card review-chapter-card">
       <button class="review-bank-toggle" type="button" data-action="toggle-review-bank" data-id="${escapeAttr(group.bank.id)}" aria-expanded="${expanded ? "true" : "false"}">
         <div>
-          <h3>${escapeHtml(getBankTitle(group.bank))}</h3>
+          <span class="review-chapter-label">章节</span>
+          <h3>${escapeHtml(getBankChapterLabel(group.bank))}</h3>
           <p class="subtle">${wrongCount} 道错题 · ${favoriteCount} 道收藏题</p>
         </div>
-        <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+        <span class="review-toggle-side">
+          <span class="type-pill">${expanded ? "收起" : "展开"}</span>
+          <span class="course-group-arrow" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+        </span>
       </button>
-      <div class="actions">
-        <button class="button" type="button" data-action="practice-wrong" data-id="${escapeAttr(group.bank.id)}" ${wrongCount ? "" : "disabled"}>重练错题</button>
-        <button class="ghost-button" type="button" data-action="practice-favorite" data-id="${escapeAttr(group.bank.id)}" ${favoriteCount ? "" : "disabled"}>练习收藏</button>
-        <button class="ghost-button" type="button" data-action="export-review-bank" data-id="${escapeAttr(group.bank.id)}">导出</button>
-      </div>
-      ${expanded && wrongCount ? `<div class="review-section"><div class="section-label">错题</div>${group.wrongQuestions.map((item) => renderReviewItem(item, "wrong")).join("")}</div>` : ""}
-      ${expanded && favoriteCount ? `<div class="review-section"><div class="section-label">收藏</div>${group.favoriteQuestions.map((item) => renderReviewItem(item, "favorite")).join("")}</div>` : ""}
+      ${expanded ? `
+        <div class="actions review-chapter-actions">
+          <button class="button" type="button" data-action="practice-wrong" data-id="${escapeAttr(group.bank.id)}" ${wrongCount ? "" : "disabled"}>重练错题</button>
+          <button class="ghost-button" type="button" data-action="practice-favorite" data-id="${escapeAttr(group.bank.id)}" ${favoriteCount ? "" : "disabled"}>练习收藏</button>
+          <button class="ghost-button" type="button" data-action="export-review-bank" data-id="${escapeAttr(group.bank.id)}">导出</button>
+        </div>
+        ${wrongCount ? `<div class="review-section"><div class="section-label">错题</div>${group.wrongQuestions.map((item) => renderReviewItem(item, "wrong")).join("")}</div>` : ""}
+        ${favoriteCount ? `<div class="review-section"><div class="section-label">收藏</div>${group.favoriteQuestions.map((item) => renderReviewItem(item, "favorite")).join("")}</div>` : ""}
+      ` : ""}
     </article>
   `;
 }
@@ -2187,6 +2256,31 @@ function nextQuestion() {
   render();
 }
 
+function previousQuestion() {
+  if (state.queueIndex <= 0) return;
+  saveExamSelection();
+  state.queueIndex -= 1;
+  if (state.sessionMode === "exam") {
+    restoreSelectionForCurrentQuestion();
+  } else {
+    restoreSubmittedPracticeAnswer();
+  }
+  state.questionPickerOpen = false;
+  persistPracticeSession();
+  render();
+}
+
+function restoreSubmittedPracticeAnswer() {
+  const question = state.queue[state.queueIndex];
+  const progress = question ? getProgress(question.id) : null;
+  const answered = Boolean(progress?.answered && progress.selectedAnswer);
+  state.selected = answered ? selectedAnswerToSet(question, progress.selectedAnswer) : new Set();
+  state.submitted = answered;
+  state.lastResult = answered
+    ? { correct: Boolean(progress.correct), selectedAnswer: progress.selectedAnswer }
+    : null;
+}
+
 function persistPracticeSession() {
   if (!state.currentBankId || !state.queue.length) return;
   const payload = {
@@ -2810,6 +2904,13 @@ function toggleReviewBank(bankId) {
   render();
 }
 
+function toggleReviewCourse(key) {
+  if (!key) return;
+  if (state.expandedReviewCourseKeys.has(key)) state.expandedReviewCourseKeys.delete(key);
+  else state.expandedReviewCourseKeys.add(key);
+  render();
+}
+
 async function importBackup(file) {
   try {
     const text = await file.text();
@@ -3302,12 +3403,28 @@ function groupBanksByCourse(banks) {
   return [...groups.values()];
 }
 
+function groupReviewGroupsByCourse(reviewGroups) {
+  const groups = new Map();
+  for (const reviewGroup of reviewGroups) {
+    const course = getBankTitle(reviewGroup.bank);
+    const key = normalizeSearchText(course) || "untitled";
+    if (!groups.has(key)) groups.set(key, { key, course, groups: [] });
+    groups.get(key).groups.push(reviewGroup);
+  }
+  return [...groups.values()];
+}
+
 function toggleBankCourseGroup(key) {
   if (!key) return;
   if (state.expandedBankCourseKeys.has(key)) state.expandedBankCourseKeys.delete(key);
   else state.expandedBankCourseKeys.add(key);
   writeStoredSet(BANK_GROUPS_KEY, state.expandedBankCourseKeys);
-  renderBankList();
+  if (state.view === "banks") renderBankList();
+  else render();
+}
+
+function getBankChapterLabel(bank) {
+  return cleanText(bank?.chapter) || "未分章节";
 }
 
 function getBankTitle(bank) {

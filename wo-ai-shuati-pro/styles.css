@@ -482,23 +482,73 @@ h3 {
 .update-prompt-card {
   position: relative;
   display: grid;
-  gap: 10px;
-  width: min(100%, 360px);
-  padding: 18px;
+  gap: 16px;
+  width: min(100%, 380px);
+  padding: 20px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
 }
 
-.update-prompt-card h2 {
-  margin-bottom: 0;
+.update-prompt-heading {
+  display: grid;
+  gap: 5px;
+}
+
+.update-prompt-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.update-prompt-badge {
+  width: max-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.update-prompt-version {
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.update-prompt-note {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.update-prompt-note span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.update-prompt-note p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .update-prompt-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 4px;
+  gap: 10px;
+}
+
+.update-prompt-actions button {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
 }
 
 .authors-footer {
@@ -552,6 +602,18 @@ h3 {
   gap: 12px;
 }
 
+.review-course-summary {
+  min-height: 92px;
+}
+
+.review-course-body {
+  padding-left: 12px;
+}
+
+.review-chapter-card {
+  padding: 12px;
+}
+
 .review-bank-toggle {
   display: flex;
   width: 100%;
@@ -572,6 +634,26 @@ h3 {
 
 .review-bank-toggle .subtle {
   margin: 4px 0 0;
+}
+
+.review-chapter-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.review-toggle-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.review-chapter-actions {
+  padding-top: 2px;
+  border-top: 1px solid var(--row-line);
 }
 
 .review-section {
